@@ -7,6 +7,7 @@ code. All real logic lives in the module that owns it.
 from __future__ import annotations
 
 import argparse
+import difflib
 import importlib.util
 import json
 import platform
@@ -17,8 +18,18 @@ from pathlib import Path
 from typing import Any
 
 from . import __version__
+from .capture import (
+    PERMISSION_HINT,
+    CaptureError,
+    crop,
+    grab_desktop,
+    is_blank,
+)
+from .clipboard import ClipboardError
+from .clipboard import copy as copy_to_clipboard
 from .layout import DEFAULT_MAX_GAP_SPACES, reconstruct
 from .models import Token
+from .ocr import OcrError, OcrUnavailable, create_backend, platform_engine
 
 EXIT_OK = 0
 EXIT_ERROR = 1
@@ -38,16 +49,106 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 
 # --------------------------------------------------------------------------- #
-# grab (wired up in Phase 2)
+# grab
 # --------------------------------------------------------------------------- #
 
 
-def _cmd_grab(_args: argparse.Namespace) -> int:
-    print(
-        "capture is not wired up yet (build plan Phase 2).\n"
-        "For now you can exercise the layout engine with: stt layout --help",
-        file=sys.stderr,
-    )
+def _cmd_grab(args: argparse.Namespace) -> int:
+    from .overlay import OverlayError, SelectionOverlay
+
+    try:
+        backend = create_backend(args.engine, args.lang)
+    except OcrUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+
+    try:
+        image = grab_desktop()
+    except CaptureError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+
+    if is_blank(image):
+        print(PERMISSION_HINT, file=sys.stderr)
+        return EXIT_ERROR
+
+    try:
+        box = SelectionOverlay(image).run()
+    except OverlayError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+
+    if box is None:
+        return EXIT_CANCELLED
+
+    region = crop(image, box)
+    try:
+        tokens = backend.read_tokens(region)
+    except OcrError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+
+    text = reconstruct(tokens, min_conf=args.min_conf)
+
+    if args.debug:
+        _print_tokens(tokens)
+        if text:
+            print(text)
+        return EXIT_OK
+
+    if not text.strip():
+        print("no text found in the selection - clipboard left untouched", file=sys.stderr)
+        return EXIT_ERROR
+
+    try:
+        copied = copy_to_clipboard(text)
+    except ClipboardError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+    if not copied:
+        print("nothing to copy - clipboard left untouched", file=sys.stderr)
+        return EXIT_ERROR
+    return EXIT_OK
+
+
+# --------------------------------------------------------------------------- #
+# demo (no screen access, no permissions)
+# --------------------------------------------------------------------------- #
+
+
+def _cmd_demo(args: argparse.Namespace) -> int:
+    from .demo import SAMPLE_CODE, render_code
+
+    try:
+        backend = create_backend(args.engine, args.lang)
+    except OcrUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+
+    image = render_code()
+    try:
+        tokens = backend.read_tokens(image)
+    except OcrError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_ERROR
+
+    text = reconstruct(tokens, min_conf=args.min_conf)
+
+    if args.show_tokens:
+        _print_tokens(tokens)
+
+    print(text)
+
+    expected = SAMPLE_CODE.rstrip("\n")
+    if text == expected:
+        print(f"\n[exact match, {len(tokens)} tokens, {backend.name}]", file=sys.stderr)
+        return EXIT_OK
+
+    print(f"\n[differs from the source, {len(tokens)} tokens, {backend.name}]", file=sys.stderr)
+    for line in difflib.unified_diff(
+        expected.split("\n"), text.split("\n"), "expected", "ocr", lineterm="", n=1
+    ):
+        print(line, file=sys.stderr)
     return EXIT_ERROR
 
 
@@ -133,7 +234,7 @@ def _cmd_doctor(_args: argparse.Namespace) -> int:
     _report("  tk screen", _tk_report())
 
     print()
-    _report("permissions", "checked at capture time (Phase 2)")
+    _report("permissions", _permission_report())
     return EXIT_OK
 
 
@@ -158,18 +259,29 @@ def _tesseract_status() -> str:
 
 
 def _detect_backend() -> str:
-    system = platform.system()
-    if system == "Darwin":
-        if _module_status("Vision") == "ok":
-            return "vision (macOS native)"
-        return "unavailable - install with: uv sync --extra mac"
-    if system == "Windows":
-        if _module_status("winsdk") == "ok":
-            return "windows ocr (native)"
-        return "unavailable - install with: uv sync --extra win"
-    if _module_status("pytesseract") == "ok":
+    engine = platform_engine()
+    module = {"vision": "Vision", "windows": "winsdk", "tesseract": "pytesseract"}[engine]
+    if _module_status(module) != "ok":
+        extra = {"vision": "mac", "windows": "win", "tesseract": "tesseract"}[engine]
+        return f"{engine} (missing - uv sync --extra {extra})"
+    if engine == "tesseract":
         return "tesseract (fallback)"
-    return "unavailable - install the [tesseract] extra"
+    return f"{engine} (native)"
+
+
+def _permission_report() -> str:
+    from .capture import permission_ok
+
+    try:
+        allowed = permission_ok()
+    except Exception as exc:  # noqa: BLE001 - doctor must never crash
+        return f"unknown ({exc})"
+    if allowed:
+        return "screen recording ok"
+    return (
+        "BLOCKED - System Settings > Privacy & Security > Screen Recording "
+        "(then reopen the terminal)"
+    )
 
 
 def _monitor_report() -> str:
@@ -269,6 +381,20 @@ def _build_parser() -> argparse.ArgumentParser:
         help="print the parsed token table to stderr",
     )
     layout.set_defaults(handler=_cmd_layout)
+
+    demo = subparsers.add_parser(
+        "demo",
+        help="render a sample snippet and OCR it - no screen access needed",
+    )
+    demo.add_argument(
+        "--engine",
+        choices=("auto", "vision", "windows", "tesseract"),
+        default="auto",
+    )
+    demo.add_argument("--lang", default=None)
+    demo.add_argument("--min-conf", type=float, default=0.0)
+    demo.add_argument("--show-tokens", action="store_true")
+    demo.set_defaults(handler=_cmd_demo)
 
     doctor = subparsers.add_parser("doctor", help="report environment, engines and displays")
     doctor.set_defaults(handler=_cmd_doctor)

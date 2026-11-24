@@ -23,10 +23,11 @@ Cross-platform: **macOS** (Apple Silicon / Intel) and **Windows**.
 └──────────────────────────────────────────────────────────┘
 ```
 
-> **Status: Phase 0 and 1 complete** — project scaffold and the layout engine are implemented and
-> tested (31 tests). Screen capture, the selection overlay and OCR backends are Phase 2, so
-> `stt grab` currently prints a "not wired up yet" notice. You *can* already test the part that
-> matters most: `uv run stt layout examples/sample_tokens.json`.
+> **Status: Phase 0–2 complete.** `uv run stt` works end-to-end on macOS: the desktop is grabbed into
+> memory, you drag a box, Apple Vision reads it, indentation is reconstructed, and the text lands on
+> your clipboard. 56 tests cover the layout engine, capture invariants, the selection overlay and the
+> full pipeline. Windows OCR (Phase 3) is written but **unverified**; hotkeys and packaging
+> (Phase 4) are not started.
 
 ---
 
@@ -247,18 +248,24 @@ winget install UB-Mannheim.TesseractOCR  # Windows
 ## Usage
 
 ```bash
-uv run stt              # select a region → text is on your clipboard  (Phase 2)
+uv run stt              # drag a box → its text is on your clipboard
+uv run stt demo         # render a code sample and OCR it (no screen, no permissions)
 uv run stt --debug      # print the reconstructed text + token boxes instead of copying
-uv run stt doctor       # check permissions, engine availability, DPI scale, monitor layout
+uv run stt doctor       # permissions, OCR engines, displays, DPI sanity check
 ```
 
-### Try the layout engine today (no screen access needed)
+Then paste anywhere with `Cmd+V` / `Ctrl+V`.
 
-Phases 0 and 1 are done, so the indentation algorithm is already usable. Feed it token geometry as
-JSON and it prints the reconstructed text:
+On success there is **no** output at all — the text appearing on your clipboard is the feedback.
+Exit codes: `0` copied, `1` error (permission, no text, engine failure), `2` cancelled with `Esc`.
+
+### Verify it without touching the screen
+
+`stt demo` renders a code snippet with a real monospace font, runs the actual OCR engine over it,
+reconstructs the layout, and tells you whether it matched the source byte for byte:
 
 ```bash
-uv run stt layout examples/sample_tokens.json
+uv run stt demo
 ```
 
 ```text
@@ -267,6 +274,18 @@ def process(items):
         if item.active:
             results.append(item)
     return results
+
+[exact match, 5 tokens, vision]
+```
+
+This is the quickest way to tell whether an OCR engine or a preprocessing change helped or hurt.
+
+### Try the layout engine in isolation
+
+Feed it token geometry as JSON and it prints the reconstructed text:
+
+```bash
+uv run stt layout examples/sample_tokens.json
 ```
 
 Add `--show-tokens` to see the parsed bounding boxes on stderr, or pipe JSON on stdin:
@@ -276,17 +295,16 @@ echo '[{"text":"a","left":0,"top":0,"width":9,"height":18},
        {"text":"b","left":90,"top":0,"width":9,"height":18}]' | uv run stt layout
 ```
 
-Then paste anywhere with `Cmd+V` / `Ctrl+V`.
+### Bind it to a key
 
-Bind `stt` to a keyboard shortcut with the tools you already have — no background daemon, no
-Accessibility permission:
+No background daemon, no Accessibility permission:
 
 - **macOS**: Raycast / Alfred / Automator Quick Action → `uv run stt` in this directory.
   A native `pynput` hotkey daemon is phase 4.
 - **Windows**: a shortcut's *Target* set to the launcher `.exe`, or AutoHotkey.
 
-`--debug` is the recommended way to tune the layout: it prints the reconstructed text between
-markers plus the raw token table, so you can see exactly why a column collapsed.
+`--debug` is the recommended way to tune the layout: it prints the reconstructed text plus the raw
+token table, so you can see exactly why a column collapsed.
 
 ---
 
@@ -297,14 +315,18 @@ markers plus the raw token table, so you can see exactly why a column collapsed.
 - **Screen Recording** permission is required by whatever process runs the script (Terminal, iTerm,
   the packaged app). Path:
   *System Settings → Privacy & Security → Screen Recording*.
-- If the grabbed desktop is near-uniform (all black / one flat colour), the README-level diagnosis
-  is "permission missing" — the tool prints that exact path instead of copying garbage.
-- Retina is a non-issue by design (see *Frozen-desktop overlay*), because selection coordinates
-  never leave the captured-image pixel space.
-- `mss` relies on `CGWindowListCreateImage`, which is deprecated on recent macOS. Capture is
-  behind a single `grab_desktop()` function; if `mss` starts returning black frames, the fallback
-  is `screencapture -x -t png -` piped to stdout → PIL (still zero disk writes). Swapping is a
-  ~5-line change.
+  `stt doctor` checks this and says `BLOCKED` if the capture comes back flat.
+- A blank capture is ambiguous: it means either the permission is missing **or** the display is
+  asleep/locked. The error message says both, rather than sending you on a permissions hunt when
+  your Mac was simply idle.
+- **Retina is a non-issue.** `mss` 10.x captures at *nominal* resolution
+  (`kCGWindowImageNominalResolution`), so a 1470×956-point display yields a 1470×956 image: capture
+  pixels and Tk points are the same space. If a future backend ever returns backing-store pixels,
+  the overlay derives a display scale from `image.width / screen.width` — that factor is used only
+  to draw the preview; the crop is always expressed in image pixels.
+- `mss` relies on `CGWindowListCreateImage`, which is deprecated on recent macOS. The
+  `screencapture -x -t png -R … -` fallback is **already wired in**: it runs automatically when the
+  `mss` frame comes back blank on macOS, and it also writes nothing to disk (PNG over stdout → PIL).
 
 ### Windows
 
@@ -317,13 +339,13 @@ markers plus the raw token table, so you can see exactly why a column collapsed.
 
 ## Build plan
 
-| Phase | Deliverable | Done when |
-| --- | --- | --- |
-| **0** | `pyproject.toml` (uv + hatchling), src layout, extras, `stt doctor` skeleton | `uv sync --extra mac` is clean, `stt --help` works |
-| **1** | `models.py`, `layout.py`, `tests/test_layout.py` | `pytest` green on nested Python code, blank lines, table columns, single-line and empty input |
-| **2** | `capture.py`, `overlay.py`, `ocr/vision.py`, `clipboard.py`, `main.py` | On macOS: select code in an editor, paste, diff against the original, no files created |
-| **3** | `ocr/windows.py`, DPI awareness, per-display overlay | Verified on a real Windows machine (see [open items](#open-items)) |
-| **4** | `pynput` hotkey daemon, `--indent tabs`, PyInstaller / py2app bundle | Hotkey grabs without a terminal; `stt.app` / `stt.exe` runs |
+| Phase | Deliverable | Done when | Status |
+| --- | --- | --- | --- |
+| **0** | `pyproject.toml` (uv + hatchling), src layout, extras, `stt doctor` skeleton | `uv sync --extra mac` is clean, `stt --help` works | ✅ |
+| **1** | `models.py`, `layout.py`, `tests/test_layout.py` | `pytest` green on nested Python code, blank lines, table columns, single-line and empty input | ✅ |
+| **2** | `capture.py`, `overlay.py`, `ocr/vision.py`, `clipboard.py`, `main.py` | On macOS: select code in an editor, paste, diff against the original, no files created | ✅ |
+| **3** | `ocr/windows.py`, DPI awareness, per-display overlay | Verified on a real Windows machine (see [open items](#open-items)) | ⚠️ written, unverified |
+| **4** | `pynput` hotkey daemon, `--indent tabs`, PyInstaller / py2app bundle | Hotkey grabs without a terminal; `stt.app` / `stt.exe` runs | ⬜ not started |
 
 Phases 0–1 need no GUI and no permissions, which is why they come first: verifiable progress on the
 riskiest logic before anything touches the screen.
@@ -343,28 +365,40 @@ token lists that mimic real geometry:
 - `conf` filtering
 - empty input → `""`
 
-**Render round-trip (`tests/test_layout_render.py`).** Draw known code with a real monospace font
-(`Menlo` / `Consolas`) via Pillow, run it through whichever backend is available, assert the text
-matches. This catches engine-specific surprises (e.g. Vision's phrase splitting). Skipped
-automatically when no backend is installed so CI stays green.
+**Render round-trip (`tests/test_layout_render.py`).** Draws known code with a real monospace font
+(`Menlo` / `Consolas`) via Pillow, runs it through whichever backend is available, and asserts the
+text matches **exactly**. Skipped automatically when no backend is installed.
 
-**Manual acceptance.** Open a source file with 3+ indentation levels, select it, paste into an
-editor with soft-wrap disabled, and diff. Target: zero diffs on monospace code.
+**Overlay geometry (`tests/test_overlay.py`).** Opens a real Tk window and synthesises the drag, so
+the mapping from what you dragged to what gets cropped is verified at 1× and at 2× (the Retina case),
+including clamping and cancel paths. Skipped when no display is available.
 
-**Invariant test.** `test_capture.py` asserts the tool creates no files: run a capture in a
-temporary cwd and assert the directory is still empty afterwards.
+**Full pipeline (`tests/test_grab_integration.py`).** Only the desktop image and the clipboard are
+faked — a rendered snippet is pasted onto a screen-sized canvas, a scripted drag selects it, and the
+real overlay → crop → Vision → layout → copy path has to reproduce the source byte for byte.
+
+**Capture invariants (`tests/test_capture.py`).** `crop()` is 1:1 (output size equals box size) and
+a capture in a temporary cwd leaves the directory empty.
+
+**Manual acceptance.** Open a source file with 3+ indentation levels, select it with `uv run stt`,
+paste into an editor with soft-wrap disabled, and diff. Target: zero diffs on monospace code.
 
 ---
 
 ## Open items
 
-1. **Windows hardware.** Without a Windows machine to test phase 3, that backend ships as
-   "written but unverified" and is flagged as such in this README. Say the word if you have one.
-2. **Multi-monitor.** v1 targets the primary display. Multi-display support (one overlay window per
-   display, enumerated via Quartz `CGGetActiveDisplayList`, each positioned in the global coordinate
-   space) is a phase 2.5 item — the one part of `AGENTS.md` that Tk makes genuinely awkward. The
-   frozen-desktop design keeps the *coordinates* trivial; only window placement is fiddly.
-3. **Toolbar-less UX.** After a successful copy there is deliberately **no** notification. If that
+1. **Windows hardware.** `ocr/windows.py` is written against `winsdk`'s `Windows.Media.Ocr` but has
+   never run on Windows. It is wrapped so that any failure degrades to
+   `stt grab --engine tesseract` instead of crashing. Needs a real PC to call it done.
+2. **Multi-monitor.** v1 captures and overlays the **primary display only**. Multi-display support
+   (one overlay window per display, enumerated via Quartz `CGGetActiveDisplayList`, each positioned
+   in the global coordinate space) is a phase 2.5 item — the one part of `AGENTS.md` that Tk makes
+   genuinely awkward. The frozen-desktop design keeps the *coordinates* trivial; only window
+   placement is fiddly.
+3. **Hotkey and packaging.** Phase 4. Today you bind `uv run stt` to a key in Raycast/Alfred/Automator
+   (macOS) or a shortcut/AutoHotkey (Windows). A `pynput` daemon and a PyInstaller/py2app bundle are
+   not built yet.
+4. **Toolbar-less UX.** After a successful copy there is deliberately **no** notification. If that
    feels like the tool didn't run, a 1-second tray-less HUD is a possible phase-4 option — off by
    default.
 

@@ -11,10 +11,9 @@ capture, drags a rectangle over the screen, and the text inside that rectangle i
 **indentation, internal spacing and blank lines preserved**, then copied to the clipboard as plain
 text — nothing else. The screenshot is never written to disk.
 
-Status: **Phases 0 and 1 are complete** — scaffold, pure layout engine and the `stt` CLI
-(`grab`, `layout`, `doctor`) exist, with 31 tests green. Screen capture, the selection overlay and
-the OCR backends are **Phase 2**; `stt grab` deliberately exits 1 with a "not wired up yet" notice.
-Start there.
+Status: **Phases 0–2 are complete** — scaffold, pure layout engine, and a working macOS pipeline
+(`stt grab`: capture → overlay → Vision → layout → clipboard), with 56 tests green. Windows OCR
+(Phase 3) exists but is **unverified**; hotkeys and packaging (Phase 4) are not started.
 
 ## Locked decisions (do not re-litigate these without asking the user)
 
@@ -164,9 +163,16 @@ Required edge-case behaviour:
   `def foo ()`, `self . x`, `x == 1` → `x = 1`. Do not "improve" this.
 - Vision boxes are **normalised, origin bottom-left**:
   `left = bb.x * W`, `top = (1 - bb.y - bb.h) * H`.
-- `mss` depends on `CGWindowListCreateImage`, deprecated on recent macOS. Keep capture behind
-  `grab_desktop()`; if it returns black frames, fall back to
-  `screencapture -x -t png -` piped to stdout → PIL. That fallback must also not write files.
+- `mss` 10.x captures at **nominal** resolution (`kCGWindowImageNominalResolution`): a 1470×956
+  point display yields a 1470×956 image, so capture pixels and Tk points are the same space. This is
+  why the project needs no Retina maths. The overlay does derive `image.width / screen.width` when
+  the two differ — that factor exists only to draw the preview; the crop is always in image pixels.
+  Never use it to "correct" the capture.
+- `mss` depends on `CGWindowListCreateImage`, deprecated on recent macOS. `capture.grab_desktop()`
+  already falls back to `screencapture -x -t png -R … -` when the mss frame is blank; that fallback
+  also writes no files (PNG over stdout → PIL). Keep both paths disk-free.
+- A blank capture means *permission denied* **or** *display asleep/locked*. The hint must mention
+  both, or you will send users chasing a permission that is already granted.
 
 ### Windows
 
@@ -194,15 +200,20 @@ Required edge-case behaviour:
   Cover: nested Python code with exact leading-space counts, a two-column table, blank-line
   insertion, single-line input (no phantom indent), `conf` filtering, empty input, `rstrip` and
   trailing-newline behaviour.
-- `test_layout_render.py` renders known code with a real monospace font (Menlo/Consolas) and runs it
-  through whichever backend is available; skip cleanly when none is installed so CI stays green.
+- `test_layout_render.py` renders known code with a real monospace font (Menlo/Consolas) and asserts
+  the OCR round trip is **exact**; skip cleanly when no backend is installed.
+- `test_overlay.py` drives the real Tk overlay with synthesised mouse events, at 1× and 2× scale, and
+  covers clamping and both cancel paths. Skip when there is no display.
+- `test_grab_integration.py` fakes only the desktop image and the clipboard, then asserts the real
+  overlay → crop → OCR → layout → copy chain reproduces the source exactly.
 - `test_capture.py` asserts no files are created and that `crop()` is 1:1 (output size equals box
   size — this guards the no-scaling invariant).
 - Run `uv run pytest` before declaring any phase done.
 
 ## Build plan (work in this order)
 
-Phases 0 and 1 are done (31 tests green); Phase 2 is next.
+Phases 0, 1 and 2 are done (56 tests green); Phase 3 (Windows) is written but unverified; Phase 4 is
+next after that.
 
 | Phase | Work | Done when |
 | --- | --- | --- |
