@@ -63,13 +63,18 @@ class SelectionOverlay:
     # -- construction ------------------------------------------------------ #
 
     def _build(self, root: tk.Tk) -> None:
-        root.overrideredirect(True)
-        root.attributes("-topmost", True)
-        root.configure(bg="black")
-
+        # Read the screen size before entering fullscreen. On macOS the native
+        # fullscreen viewport excludes the menu bar; the preview is still drawn
+        # at capture-pixel size from (0, 0), so the visible part stays 1:1.
         width, height = root.winfo_screenwidth(), root.winfo_screenheight()
         self._screen = (width, height)
-        root.geometry(f"{width}x{height}+0+0")
+
+        # Do NOT use overrideredirect here. On macOS/Tk 9 a borderless topmost
+        # window that is merely sized to the screen renders blank white. Native
+        # fullscreen is stable and draws the PhotoImage correctly.
+        root.attributes("-topmost", True)
+        root.attributes("-fullscreen", True)
+        root.configure(bg="black")
 
         bright = self._image
         if bright.size != (width, height):
@@ -161,10 +166,20 @@ class SelectionOverlay:
 
     # -- painting ---------------------------------------------------------- #
 
+    def _viewport_size(self) -> tuple[int, int]:
+        """The size of the visible canvas (native fullscreen excludes the menu bar)."""
+        if self._canvas is None:
+            return self._screen
+        width, height = self._canvas.winfo_width(), self._canvas.winfo_height()
+        return (
+            width if width > 1 else self._screen[0],
+            height if height > 1 else self._screen[1],
+        )
+
     def _paint(self, x1: int, y1: int, x2: int, y2: int) -> None:
         if self._canvas is None:
             return
-        screen_width, screen_height = self._screen
+        screen_width, screen_height = self._viewport_size()
         left, right = sorted((max(0, min(x1, screen_width)), max(0, min(x2, screen_width))))
         top, bottom = sorted((max(0, min(y1, screen_height)), max(0, min(y2, screen_height))))
 
@@ -187,7 +202,7 @@ class SelectionOverlay:
         if self._canvas is None or self._label is None or self._label_bg is None:
             return
         canvas = self._canvas
-        screen_width, screen_height = self._screen
+        screen_width, screen_height = self._viewport_size()
 
         canvas.itemconfigure(self._label, text=text, state="normal")
         canvas.coords(self._label, 0, 0)

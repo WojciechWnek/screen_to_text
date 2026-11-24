@@ -25,7 +25,7 @@ Cross-platform: **macOS** (Apple Silicon / Intel) and **Windows**.
 
 > **Status: Phase 0–2 complete.** `uv run stt` works end-to-end on macOS: the desktop is grabbed into
 > memory, you drag a box, Apple Vision reads it, indentation is reconstructed, and the text lands on
-> your clipboard. 56 tests cover the layout engine, capture invariants, the selection overlay and the
+> your clipboard. 57 tests cover the layout engine, capture invariants, the selection overlay and the
 > full pipeline. Windows OCR (Phase 3) is written but **unverified**; hotkeys and packaging
 > (Phase 4) are not started.
 
@@ -319,6 +319,9 @@ token table, so you can see exactly why a column collapsed.
 - A blank capture is ambiguous: it means either the permission is missing **or** the display is
   asleep/locked. The error message says both, rather than sending you on a permissions hunt when
   your Mac was simply idle.
+- The overlay uses Tk's native fullscreen mode. On macOS the menu bar stays visible and the preview
+  is drawn from the top of the captured image, so what you see under the veil is exactly what gets
+  cropped — still 1:1, no Retina math.
 - **Retina is a non-issue.** `mss` 10.x captures at *nominal* resolution
   (`kCGWindowImageNominalResolution`), so a 1470×956-point display yields a 1470×956 image: capture
   pixels and Tk points are the same space. If a future backend ever returns backing-store pixels,

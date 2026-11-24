@@ -12,7 +12,7 @@ capture, drags a rectangle over the screen, and the text inside that rectangle i
 text — nothing else. The screenshot is never written to disk.
 
 Status: **Phases 0–2 are complete** — scaffold, pure layout engine, and a working macOS pipeline
-(`stt grab`: capture → overlay → Vision → layout → clipboard), with 56 tests green. Windows OCR
+(`stt grab`: capture → overlay → Vision → layout → clipboard), with 57 tests green. Windows OCR
 (Phase 3) exists but is **unverified**; hotkeys and packaging (Phase 4) are not started.
 
 ## Locked decisions (do not re-litigate these without asking the user)
@@ -173,6 +173,10 @@ Required edge-case behaviour:
   also writes no files (PNG over stdout → PIL). Keep both paths disk-free.
 - A blank capture means *permission denied* **or** *display asleep/locked*. The hint must mention
   both, or you will send users chasing a permission that is already granted.
+- Tk 9/macOS renders a borderless topmost overlay **blank white**. Use native fullscreen
+  (`root.attributes("-fullscreen", True)`) and do **not** call `overrideredirect(True)` there. The
+  native viewport excludes the menu bar, but the preview is drawn at capture-pixel size from (0, 0),
+  so the visible region stays 1:1 — do not resize it to the viewport height.
 
 ### Windows
 
@@ -212,7 +216,7 @@ Required edge-case behaviour:
 
 ## Build plan (work in this order)
 
-Phases 0, 1 and 2 are done (56 tests green); Phase 3 (Windows) is written but unverified; Phase 4 is
+Phases 0, 1 and 2 are done (57 tests green); Phase 3 (Windows) is written but unverified; Phase 4 is
 next after that.
 
 | Phase | Work | Done when |

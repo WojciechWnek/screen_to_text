@@ -118,3 +118,26 @@ def test_escape_cancels() -> None:
     image = Image.new("RGB", (width, height), "white")
 
     assert ScriptedOverlay(image, None, escape=True).run() is None
+
+
+def test_overlay_uses_native_fullscreen_not_borderless_window() -> None:
+    """Regression: Tk 9/macOS renders a borderless topmost overlay blank white."""
+    width, height = _screen_size()
+
+    class Probe(SelectionOverlay):
+        def __init__(self, image: Image.Image) -> None:
+            super().__init__(image)
+            self.fullscreen: bool | None = None
+            self.borderless: bool | None = None
+
+        def _build(self, root: tk.Tk) -> None:
+            super()._build(root)
+            self.fullscreen = bool(root.attributes("-fullscreen"))
+            self.borderless = bool(root.overrideredirect())
+            root.after(50, self._cancel)
+
+    probe = Probe(Image.new("RGB", (width, height), "white"))
+    probe.run()
+
+    assert probe.fullscreen is True
+    assert probe.borderless is False
