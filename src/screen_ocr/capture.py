@@ -9,6 +9,7 @@ from __future__ import annotations
 import io
 import subprocess
 import sys
+import threading
 from dataclasses import dataclass
 from typing import Any
 
@@ -44,12 +45,24 @@ class Monitor:
         return self.width, self.height
 
 
+def list_monitors() -> list[Monitor]:
+    """Displays available to the capture path, in ScreenCaptureKit order."""
+    if sys.platform == "darwin":
+        try:
+            found = _sck_monitors()
+            if found:
+                return found
+        except CaptureError:
+            pass  # older macOS: fall through to mss
+    found = _mss_monitors()
+    if not found:
+        raise CaptureError("no display detected")
+    return found
+
+
 def primary_monitor() -> Monitor:
     """The display the overlay covers in v1."""
-    monitors = _mss_monitors()
-    if not monitors:
-        raise CaptureError("no display detected")
-    return monitors[0]
+    return list_monitors()[0]
 
 
 def _mss_monitors() -> list[Monitor]:
@@ -76,18 +89,132 @@ def _mss_monitors() -> list[Monitor]:
     ]
 
 
+def _sck_content(timeout: float = 10.0) -> Any:
+    """Ask ScreenCaptureKit for the shareable content, without touching disk."""
+    try:
+        import ScreenCaptureKit as SCK
+    except ImportError as exc:  # pragma: no cover - guarded by the [mac] extra
+        raise CaptureError(
+            "ScreenCaptureKit is not available; run: uv sync --extra mac"
+        ) from exc
+
+    done = threading.Event()
+    result: dict[str, Any] = {}
+
+    def on_content(content: Any, error: Any) -> None:
+        # A completion block must return None; returning anything from a Python
+        # callback raises inside libobjc and can terminate the process.
+        result["content"] = content
+        result["error"] = error
+        done.set()
+
+    try:
+        SCK.SCShareableContent.getShareableContentExcludingDesktopWindows_onScreenWindowsOnly_completionHandler_(
+            False, True, on_content
+        )
+    except Exception as exc:  # noqa: BLE001 - report one actionable line
+        raise CaptureError(f"cannot enumerate displays: {exc}") from exc
+    if not done.wait(timeout):
+        raise CaptureError("display enumeration timed out")
+    if result.get("error") is not None:
+        raise CaptureError(f"cannot enumerate displays: {result['error']}")
+    return result["content"]
+
+
+def _sck_monitors() -> list[Monitor]:
+    displays = list(_sck_content().displays())
+    return [
+        Monitor(
+            int(display.frame().origin.x),
+            int(display.frame().origin.y),
+            int(display.width()),
+            int(display.height()),
+        )
+        for display in displays
+    ]
+
+
+def _grab_with_screencapturekit(monitor: Monitor) -> Image.Image:
+    """Capture a display with Apple's ScreenCaptureKit, entirely in RAM."""
+    # Quartz registers the CGImage type with pyobjc; importing it only after
+    # the callback has run leaves CGImage as an opaque pointer and can crash.
+    import Quartz  # noqa: F401
+    import ScreenCaptureKit as SCK
+    from AppKit import NSBitmapImageFileTypePNG, NSBitmapImageRep
+
+    displays = list(_sck_content().displays())
+    if not displays:
+        raise CaptureError("no display detected")
+    display = next(
+        (
+            item
+            for item in displays
+            if int(item.width()) == monitor.width and int(item.height()) == monitor.height
+        ),
+        displays[0],
+    )
+
+    scale = float(
+        SCK.SCContentFilter.alloc().pointPixelScaleForDisplayID_(display.displayID())
+    )
+    if scale <= 0:
+        scale = 1.0
+    config = SCK.SCStreamConfiguration.alloc().init()
+    config.setWidth_(max(1, int(round(monitor.width * scale))))
+    config.setHeight_(max(1, int(round(monitor.height * scale))))
+    content_filter = SCK.SCContentFilter.alloc().initWithDisplay_excludingWindows_(
+        display, []
+    )
+
+    done = threading.Event()
+    result: dict[str, Any] = {}
+
+    def on_image(image: Any, error: Any) -> None:
+        result["image"] = image
+        result["error"] = error
+        done.set()
+
+    try:
+        SCK.SCScreenshotManager.captureImageWithFilter_configuration_completionHandler_(
+            content_filter, config, on_image
+        )
+    except Exception as exc:  # noqa: BLE001 - report one actionable line
+        raise CaptureError(f"screen capture failed: {exc}") from exc
+    if not done.wait(15):
+        raise CaptureError("screen capture timed out")
+    if result.get("error") is not None:
+        raise CaptureError(f"screen capture failed: {result['error']}")
+    cg_image = result.get("image")
+    if cg_image is None:
+        raise CaptureError("screen capture returned no image")
+
+    try:
+        bitmap = NSBitmapImageRep.alloc().initWithCGImage_(cg_image)
+        png = bitmap.representationUsingType_properties_(NSBitmapImageFileTypePNG, {})
+        with Image.open(io.BytesIO(bytes(png))) as opened:
+            return opened.convert("RGB").copy()
+    except Exception as exc:  # noqa: BLE001
+        raise CaptureError(f"cannot convert the captured image: {exc}") from exc
+
+
 def grab_desktop(monitor: Monitor | None = None) -> Image.Image:
     """Grab one display (the primary one by default) into a ``PIL.Image``."""
     target = monitor or primary_monitor()
 
-    image = _grab_with_mss(target)
-    if is_blank(image) and sys.platform == "darwin":
-        # Either the permission is missing or this macOS build broke mss'
-        # deprecated CGWindowListCreateImage path. One fallback tells them apart.
-        fallback = _grab_with_screencapture(target)
-        if fallback is not None and not is_blank(fallback):
-            return fallback
-    return image
+    if sys.platform == "darwin":
+        try:
+            image = _grab_with_screencapturekit(target)
+        except CaptureError:
+            image = _grab_with_mss(target)  # older macOS / missing framework
+        if is_blank(image):
+            # A flat frame means permission denied or a locked display. The
+            # CLI fallback is a second, independent native capture path.
+            fallback = _grab_with_screencapture(target)
+            if fallback is not None and not is_blank(fallback):
+                return fallback
+        return image
+
+    return _grab_with_mss(target)
 
 
 def _grab_with_mss(monitor: Monitor) -> Image.Image:

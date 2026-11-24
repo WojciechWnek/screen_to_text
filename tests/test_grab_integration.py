@@ -17,7 +17,7 @@ from PIL import Image  # noqa: E402
 from screen_ocr.demo import SAMPLE_CODE, render_code  # noqa: E402
 from screen_ocr.main import EXIT_OK, main  # noqa: E402
 from screen_ocr.ocr import OcrUnavailable, create_backend  # noqa: E402
-from screen_ocr.overlay import SelectionOverlay  # noqa: E402
+from screen_ocr.overlay import TkSelectionOverlay  # noqa: E402
 
 
 def _screen_size() -> tuple[int, int]:
@@ -44,7 +44,7 @@ OFFSET = (120, 120)
 MARGIN = 6
 
 
-class _ScriptedOverlay(SelectionOverlay):
+class _ScriptedOverlay(TkSelectionOverlay):
     """Drags a fixed rectangle instead of waiting for a human."""
 
     def __init__(self, image: Image.Image, drag: tuple[int, int, int, int]) -> None:

@@ -288,7 +288,9 @@ def _cmd_doctor(_args: argparse.Namespace) -> int:
 
     print()
     print("dependencies")
-    _report("  mss", _module_status("mss"))
+    _report("  mss", _module_status("mss"), suffix="(Windows/fallback)")
+    _report("  screencapkit", _module_status("ScreenCaptureKit"), suffix="(macOS)")
+    _report("  appkit", _module_status("AppKit"), suffix="(macOS overlay)")
     _report("  pillow", _module_status("PIL"))
     _report("  pyperclip", _module_status("pyperclip"))
     _report("  tkinter", _module_status("tkinter"))
@@ -357,24 +359,20 @@ def _permission_report() -> str:
 
 
 def _monitor_report() -> str:
+    from .capture import list_monitors
+
     try:
-        import mss
-    except ImportError:
-        return "unavailable (install mss)"
-    try:
-        with mss.mss() as sct:
-            monitors = list(sct.monitors)
+        monitors = list_monitors()
     except Exception as exc:  # noqa: BLE001 - report, never crash doctor
         return f"unavailable ({exc})"
-
-    displays = monitors[1:]  # index 0 is the virtual desktop union
-    if not displays:
+    if not monitors:
         return "none detected"
     described = ", ".join(
-        f"{monitor['width']}x{monitor['height']}+{monitor['left']}+{monitor['top']}"
-        for monitor in displays
+        f"{monitor.width}x{monitor.height}+{monitor.left}+{monitor.top}"
+        for monitor in monitors
     )
-    return f"{len(displays)} display(s): {described}"
+    api = "ScreenCaptureKit" if sys.platform == "darwin" else "mss"
+    return f"{len(monitors)} display(s) via {api}: {described}"
 
 
 def _tk_report() -> str:
@@ -410,25 +408,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     parser.set_defaults(handler=_cmd_grab)
+    # Bare `stt` is the normal invocation, so the root parser must carry the
+    # same defaults as `stt grab`.
+    _add_grab_options(parser)
 
     subparsers = parser.add_subparsers(dest="command", metavar="command")
 
     grab = subparsers.add_parser("grab", help="select a region and copy its text (default)")
-    grab.add_argument(
-        "--engine",
-        choices=("auto", "vision", "windows", "tesseract"),
-        default="auto",
-        help="OCR engine to use (default: auto-detect for this platform)",
-    )
-    grab.add_argument("--lang", default=None, help="OCR language hint, e.g. en-US")
-    grab.add_argument(
-        "--min-conf",
-        type=float,
-        default=0.0,
-        help="drop OCR tokens below this confidence (0.0-1.0)",
-    )
-    grab.add_argument("--debug", action="store_true", help="print text and token boxes, do not copy")
-    _add_indent_options(grab)
+    _add_grab_options(grab)
     grab.set_defaults(handler=_cmd_grab)
 
     listen = subparsers.add_parser(
@@ -498,6 +485,26 @@ def _build_parser() -> argparse.ArgumentParser:
     doctor.set_defaults(handler=_cmd_doctor)
 
     return parser
+
+
+def _add_grab_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--engine",
+        choices=("auto", "vision", "windows", "tesseract"),
+        default="auto",
+        help="OCR engine to use (default: auto-detect for this platform)",
+    )
+    parser.add_argument("--lang", default=None, help="OCR language hint, e.g. en-US")
+    parser.add_argument(
+        "--min-conf",
+        type=float,
+        default=0.0,
+        help="drop OCR tokens below this confidence (0.0-1.0)",
+    )
+    parser.add_argument(
+        "--debug", action="store_true", help="print text and token boxes, do not copy"
+    )
+    _add_indent_options(parser)
 
 
 def _add_indent_options(parser: argparse.ArgumentParser) -> None:

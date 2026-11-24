@@ -150,6 +150,11 @@ def test_grab_copies_reconstructed_text(
     assert captured.err == ""
 
 
+def test_bare_command_uses_grab_defaults(grab_env: dict[str, str]) -> None:
+    assert main([]) == EXIT_OK
+    assert grab_env["text"] == "def f():"
+
+
 def test_grab_cancel_leaves_clipboard_untouched(
     grab_env: dict[str, str], monkeypatch: pytest.MonkeyPatch
 ) -> None:

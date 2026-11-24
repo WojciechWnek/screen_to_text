@@ -1,9 +1,9 @@
-"""Selection overlay tests.
+"""Windows/Tk selection overlay tests.
 
 These open a real (briefly visible) Tk window and synthesise mouse events, so
-they are skipped when no display is available. They are the guard against the
-one thing that would silently ruin every capture: coordinate drift between what
-the user dragged and what gets cropped.
+they are skipped when no display is available. macOS now uses the native AppKit
+overlay and has its own tests in ``test_overlay_macos.py``. Both suites guard
+the same thing: coordinate drift between the drag and the cropped image.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ tk = pytest.importorskip("tkinter")
 
 from PIL import Image  # noqa: E402
 
-from screen_ocr.overlay import SelectionOverlay  # noqa: E402
+from screen_ocr.overlay import TkSelectionOverlay  # noqa: E402
 
 
 def _tk_root() -> object:
@@ -42,7 +42,7 @@ def _display_available() -> bool:
 pytestmark = pytest.mark.skipif(not _display_available(), reason="no display available")
 
 
-class ScriptedOverlay(SelectionOverlay):
+class ScriptedOverlay(TkSelectionOverlay):
     """Drives a selection programmatically instead of waiting for a human."""
 
     def __init__(
@@ -124,7 +124,7 @@ def test_overlay_uses_native_fullscreen_not_borderless_window() -> None:
     """Regression: Tk 9/macOS renders a borderless topmost overlay blank white."""
     width, height = _screen_size()
 
-    class Probe(SelectionOverlay):
+    class Probe(TkSelectionOverlay):
         def __init__(self, image: Image.Image) -> None:
             super().__init__(image)
             self.fullscreen: bool | None = None

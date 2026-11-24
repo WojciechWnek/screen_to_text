@@ -12,8 +12,9 @@ capture, drags a rectangle over the screen, and the text inside that rectangle i
 text — nothing else. The screenshot is never written to disk.
 
 Status: **Phases 0–2 and 4 are complete** — scaffold, pure layout engine, a working macOS pipeline
-(`stt grab`: capture → overlay → Vision → layout → clipboard), and a `pynput` hotkey daemon with
-bundles, with 69 tests green. Windows OCR (Phase 3) and the Windows `.exe` build are **unverified**.
+(`stt grab`: ScreenCaptureKit → native overlay → Vision → layout → clipboard), and a `pynput` hotkey
+daemon with bundles, with 92 tests green. Windows OCR (Phase 3) and the Windows `.exe` build are
+**unverified**.
 
 ## Locked decisions (do not re-litigate these without asking the user)
 
@@ -26,18 +27,21 @@ scope change, not a refactor.
    - Optional fallback: **Tesseract** via `pytesseract`, behind the `[tesseract]` extra only.
    - All behind one `OcrBackend` protocol returning `list[Token]`.
 2. **Frozen-desktop overlay, NOT a translucent tint.**
-   Grab the desktop into memory *first*, then display that image in a borderless fullscreen Tk
-   window with a dimming veil and a Canvas selection rectangle. On mouse release,
-   `image.crop(box)` — the box is already in captured-image pixels.
-   - This is why there is **no Retina/DPI scaling math anywhere**. Do not reintroduce coordinate
-     conversion between Tk points and capture pixels.
+   Grab the desktop into memory *first*, then display that image in a full-screen window with a
+   dimming veil and a selection rectangle. On mouse release, `image.crop(box)` — the box is already
+   in captured-image pixels.
+   - macOS: ScreenCaptureKit capture + a native AppKit/Quartz window. Tk must not be imported there.
+   - Windows: `mss` capture + the existing Tk/Canvas window. Leave this path unchanged.
+   - `selection_state.py` owns the one preview scale factor (`image.width / viewport.width`). It is
+     used only to map pointer points to image pixels; never use it to rescale the crop or the text.
    - This is why the captured image is never darkened by the overlay.
    - Do not "simplify" this back into an alpha overlay over the live screen.
 3. **`layout.py` is a pure function.** `list[Token] -> str`. No I/O, no Tk, no OCR imports, no
    global state, no config file reads. All of the hard logic lives here and is tested without OCR.
-4. **Tkinter** for the overlay (no Qt, no webview). **`mss`** for capture. **`pyperclip`** for the
-   clipboard. **`uv`** for environments, pinned to **Python 3.12 or 3.13** — the machine's default
-   3.15 is too new for reliable `pyobjc` wheels.
+4. **Native AppKit** for the macOS overlay, **Tkinter** for the Windows overlay (no Qt, no webview).
+   **ScreenCaptureKit** for macOS capture (macOS 13+), **`mss`** for Windows and as a fallback.
+   **`pyperclip`** for the clipboard. **`uv`** for environments, pinned to **Python 3.12 or 3.13** —
+   the machine's default 3.15 is too new for reliable `pyobjc` wheels.
 5. **CLI-first.** Entry point `stt`. The global hotkey daemon (`pynput`, `stt listen`) and packaging
    arrived in Phase 4, after the core worked. Do not add a tray icon: the bundled app is a
    terminal-less daemon, not a tray UI.
@@ -48,8 +52,10 @@ Violating any of these is a bug, regardless of what else works.
 
 ### 1. No files on disk, ever
 
-- `mss` frames go straight to `PIL.Image.frombytes(...)`. No temp files, no `.png`, no `/tmp`, not
+- ScreenCaptureKit frames go `CGImage` → `NSBitmapImageRep` → PNG bytes in `BytesIO` → `PIL.Image`.
+  `mss` frames go straight to `PIL.Image.frombytes(...)`. No temp files, no `.png`, no `/tmp`, not
   even behind a debug flag.
+- The `screencapture -x -t png -R … -` fallback pipes PNG over stdout into PIL. Keep it disk-free.
 - Preprocessing (upscale, grayscale, contrast) happens in RAM on the `PIL.Image`.
 - `--debug` prints **text** and a token table to stdout. It must never dump an image.
 - Add/extend the test that runs a capture in an empty temp cwd and asserts the directory is still
@@ -66,8 +72,8 @@ Violating any of these is a bug, regardless of what else works.
 ### 3. The overlay must never trap the user
 
 - `Esc` cancels and returns `None`; the caller then exits without copying.
-- Always destroy the Tk root in a `finally` block.
-- Bind both `<Escape>` and window-close. Catch `KeyboardInterrupt`.
+- Always destroy the Tk root / close the AppKit window in a `finally` block.
+- Bind Escape, right-click, window-close and a global mouse-up monitor. Catch `KeyboardInterrupt`.
 - Releasing the mouse outside the window, or a zero-area drag, must be treated as a cancel.
 
 ### 4. Silence on success
@@ -81,8 +87,10 @@ the feedback. `--debug` is the only chatty mode.
 src/screen_ocr/
   main.py         # CLI: `stt`, `stt grab`, `stt listen`, `stt demo`, `stt doctor`; wiring only
   models.py       # Token dataclass
-  capture.py      # grab_desktop() -> PIL.Image, crop(img, box) -> PIL.Image
-  overlay.py      # frozen-desktop selection UI, returns box|None
+  capture.py      # grab_desktop() -> PIL.Image (SCK on macOS), crop(img, box) -> PIL.Image
+  overlay.py      # platform dispatch + Windows Tk selection UI, returns box|None
+  overlay_macos.py # native AppKit/Quartz selection UI (macOS only)
+  selection_state.py # PURE: pointer points -> image-pixel crop box
   layout.py       # PURE: list[Token] -> str
   clipboard.py    # copy(text), silent no-op on blank
   hotkey.py       # pynput listener; queues events, runs grab_once on the main thread
@@ -101,7 +109,9 @@ tests/
   test_layout.py          # synthetic boxes -> golden strings (primary safety net)
   test_layout_render.py   # render real code with a real monospace font, round-trip
   test_capture.py         # crop invariants + "no files created"
-  test_overlay.py         # selection UI, both cancel paths
+  test_overlay.py         # Windows Tk selection UI, both cancel paths
+  test_overlay_macos.py   # native AppKit selection UI and cancel paths
+  test_selection_state.py # PURE drag -> pixel mapping
   test_grab_integration.py # overlay -> crop -> OCR -> layout -> clipboard
   test_hotkey.py          # daemon wiring with a scripted listener
   test_cli.py             # exit codes and argument wiring
@@ -111,7 +121,7 @@ Data flow — keep it this shape:
 
 ```python
 img  = capture.grab_desktop()      # RAM only
-box  = overlay.select(img)         # None on Esc
+box  = overlay.SelectionOverlay(img).run()  # None on Esc
 if box is None: return             # clipboard untouched
 crop = capture.crop(img, box)      # 1:1 pixels, no scaling
 toks = backend.read_tokens(crop)   # list[Token]
@@ -177,20 +187,28 @@ Required edge-case behaviour:
   `def foo ()`, `self . x`, `x == 1` → `x = 1`. Do not "improve" this.
 - Vision boxes are **normalised, origin bottom-left**:
   `left = bb.x * W`, `top = (1 - bb.y - bb.h) * H`.
-- `mss` 10.x captures at **nominal** resolution (`kCGWindowImageNominalResolution`): a 1470×956
-  point display yields a 1470×956 image, so capture pixels and Tk points are the same space. This is
-  why the project needs no Retina maths. The overlay does derive `image.width / screen.width` when
-  the two differ — that factor exists only to draw the preview; the crop is always in image pixels.
-  Never use it to "correct" the capture.
-- `mss` depends on `CGWindowListCreateImage`, deprecated on recent macOS. `capture.grab_desktop()`
-  already falls back to `screencapture -x -t png -R … -` when the mss frame is blank; that fallback
-  also writes no files (PNG over stdout → PIL). Keep both paths disk-free.
+- Capture uses **ScreenCaptureKit** (`SCScreenshotManager`, macOS 13+) and produces backing-store
+  pixels: a 1470×956-point display yields a 2940×1912 image. Convert via `NSBitmapImageRep` → PNG
+  bytes in `BytesIO` → PIL. Do not write an image file, even for debugging.
+- PyObjC completion blocks **must return `None`**; returning anything (even from a `lambda`) raises
+  inside libobjc and can terminate the process. Import `Quartz` before a `CGImage` callback runs so
+  pyobjc registers the type.
+- `selection_state.py` derives `image.width / viewport.width` only to map pointer points onto the
+  preview. The crop is always in image pixels; never use that factor to "correct" the capture or the
+  OCR tokens.
+- `mss` depends on `CGWindowListCreateImage`, deprecated on recent macOS. It remains as a fallback
+  when ScreenCaptureKit is unavailable; `capture.grab_desktop()` also falls back to
+  `screencapture -x -t png -R … -` on a blank frame. Both paths stay disk-free.
 - A blank capture means *permission denied* **or** *display asleep/locked*. The hint must mention
   both, or you will send users chasing a permission that is already granted.
-- Tk 9/macOS renders a borderless topmost overlay **blank white**. Use native fullscreen
-  (`root.attributes("-fullscreen", True)`) and do **not** call `overrideredirect(True)` there. The
-  native viewport excludes the menu bar, but the preview is drawn at capture-pixel size from (0, 0),
-  so the visible region stays 1:1 — do not resize it to the viewport height.
+- The overlay is a native borderless AppKit window at `kCGStatusWindowLevel` (high enough to cover
+  apps, low enough that system dialogs and Force Quit stay reachable), with a flipped `NSView`,
+  dimmed frozen image, bright selection, cyan outline and size label. It is *not* Tk.
+  Cancel on Escape, right-click, window-close, global mouse-up outside the window, auto-close (test
+  hook) and zero-area/tiny drags. `NSRunLoopCommonModes` is required for timers to fire during
+  `runModalForWindow_`. PyObjC 13 has no `-[NSEvent locationInView:]`; pass `locationInWindow`
+  through `convertPoint:fromView:` and trust its flipped result — flipping y again inverts the drag.
+  Every event handler is guarded so an exception cancels the modal loop instead of trapping the user.
 
 ### Windows
 
@@ -220,8 +238,10 @@ Required edge-case behaviour:
   trailing-newline behaviour.
 - `test_layout_render.py` renders known code with a real monospace font (Menlo/Consolas) and asserts
   the OCR round trip is **exact**; skip cleanly when no backend is installed.
-- `test_overlay.py` drives the real Tk overlay with synthesised mouse events, at 1× and 2× scale, and
-  covers clamping and both cancel paths. Skip when there is no display.
+- `test_selection_state.py` checks drag→pixel mapping at 1× and 2× with no window.
+- `test_overlay.py` drives the real Tk overlay (Windows path) with synthesised mouse events and
+  covers clamping and both cancel paths. `test_overlay_macos.py` does the same for the native AppKit
+  overlay on macOS. Skip when there is no display.
 - `test_grab_integration.py` fakes only the desktop image and the clipboard, then asserts the real
   overlay → crop → OCR → layout → copy chain reproduces the source exactly.
 - `test_capture.py` asserts no files are created and that `crop()` is 1:1 (output size equals box
@@ -230,8 +250,8 @@ Required edge-case behaviour:
 
 ## Build plan (work in this order)
 
-Phases 0, 1, 2 and 4 are done (69 tests green); Phase 3 (Windows) and the Windows `.exe` build are
-written but unverified.
+Phases 0, 1, 2 and 4 are done (92 tests green); the macOS capture/overlay rewrite is implemented.
+Phase 3 (Windows) and the Windows `.exe` build are written but unverified.
 
 | Phase | Work | Done when |
 | --- | --- | --- |
@@ -247,9 +267,9 @@ Do not skip ahead to packaging or hotkeys while Phase 1 tests are red.
 
 - **Windows verification:** without Windows hardware, `ocr/windows.py` ships marked "unverified" in
   the README. Ask the user before claiming Windows support works.
-- **Multi-monitor:** v1 targets the primary display only. Per-display overlay windows (Quartz
-  `CGGetActiveDisplayList`, each positioned in global coordinate space) are Phase 2.5. Tk makes
-  negative window offsets awkward — verify empirically on the Mac before designing around it.
+- **Multi-monitor:** v1 targets the primary display only. ScreenCaptureKit already enumerates all
+  displays; per-display AppKit windows positioned in global coordinate space are Phase 2.5. Verify
+  negative window offsets empirically before designing around them.
 - **No success feedback** is intentional; a 1-second HUD remains a possible opt-in future option,
   off by default (not shipped in Phase 4).
 

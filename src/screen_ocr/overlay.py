@@ -1,45 +1,89 @@
-"""Frozen-desktop selection overlay.
+"""Selection overlay API.
 
-The desktop is already in memory when this window appears, so the rectangle the
-user drags is expressed directly in captured-image pixels. That is what removes
-all Retina/DPI coordinate maths from the project.
+macOS uses a native AppKit/Quartz window (:mod:`screen_ocr.overlay_macos`).
+Windows keeps the Tk implementation below. Both show the *already captured*
+desktop, so the rectangle returned by :meth:`run` is in captured-image pixels
+and the caller never has to convert between points and pixels.
 """
 
 from __future__ import annotations
 
-import tkinter as tk
+import sys
+from typing import Any, Protocol
 
-from PIL import Image, ImageTk
+from PIL import Image
 
-from .capture import Box, normalize_box
-
-#: A drag smaller than this (in image pixels) counts as a cancel.
-MIN_SELECTION_PX = 4
-
-#: How much to darken the parts of the desktop outside the selection.
-VEIL_ALPHA = 0.45
+from .capture import Box
+from .selection_state import MIN_SELECTION_PX, VEIL_ALPHA
 
 OUTLINE_COLOR = "#00d4ff"
 LABEL_BACKGROUND = "#101418"
 LABEL_FOREGROUND = "#e6f7ff"
+
+__all__ = [
+    "MIN_SELECTION_PX",
+    "VEIL_ALPHA",
+    "OverlayError",
+    "SelectionOverlay",
+    "TkSelectionOverlay",
+    "select",
+]
 
 
 class OverlayError(RuntimeError):
     """Raised when the selection window cannot be created."""
 
 
-class SelectionOverlay:
+class _Overlay(Protocol):
+    def run(self) -> Box | None: ...
+
+
+def SelectionOverlay(
+    image: Image.Image, *, auto_close_ms: int | None = None
+) -> _Overlay:
+    """Return the platform's overlay implementation for ``image``.
+
+    Kept as a callable with the old class name so the CLI wiring and its tests
+    stay simple: ``SelectionOverlay(image).run()`` reads the same on both OSes.
+    """
+    if sys.platform == "darwin":
+        from .overlay_macos import MacSelectionOverlay
+
+        return MacSelectionOverlay(image, auto_close_ms=auto_close_ms)
+    return TkSelectionOverlay(image, auto_close_ms=auto_close_ms)
+
+
+def select(image: Image.Image, *, auto_close_ms: int | None = None) -> Box | None:
+    """Convenience wrapper: build the overlay and run it once."""
+    return SelectionOverlay(image, auto_close_ms=auto_close_ms).run()
+
+
+def _tk_modules() -> tuple[Any, Any]:
+    """Import Tk lazily; macOS must not depend on it at all."""
+    try:
+        import tkinter as tk
+        from PIL import ImageTk
+    except ImportError as exc:  # pragma: no cover - headless/minimal installs
+        raise OverlayError(f"tkinter is not available: {exc}") from exc
+    return tk, ImageTk
+
+
+class TkSelectionOverlay:
+    """Windows overlay: fullscreen Tk canvas over a frozen desktop image."""
+
     def __init__(self, image: Image.Image, *, auto_close_ms: int | None = None) -> None:
         self._image = image
         self._auto_close_ms = auto_close_ms
-        self._root: tk.Tk | None = None
-        self._canvas: tk.Canvas | None = None
+        self._tk: Any | None = None
+        self._image_tk: Any | None = None
+        self._root: Any | None = None
+        self._canvas: Any | None = None
         self._image_item: int | None = None
         self._veil: list[int] = []
         self._outline: int | None = None
         self._label: int | None = None
         self._label_bg: int | None = None
-        self._photos: tuple[ImageTk.PhotoImage, ...] = ()
+        self._photos: tuple[Any, ...] = ()
         self._screen = (0, 0)
         self._scale = 1.0
         self._start: tuple[int, int] | None = None
@@ -49,6 +93,8 @@ class SelectionOverlay:
 
     def run(self) -> Box | None:
         """Show the overlay and return the selection in image pixels, or None."""
+        tk, image_tk = _tk_modules()
+        self._tk, self._image_tk = tk, image_tk
         root = tk.Tk()
         self._root = root
         try:
@@ -62,7 +108,7 @@ class SelectionOverlay:
 
     # -- construction ------------------------------------------------------ #
 
-    def _build(self, root: tk.Tk) -> None:
+    def _build(self, root: Any) -> None:
         # Read the screen size before entering fullscreen. On macOS the native
         # fullscreen viewport excludes the menu bar; the preview is still drawn
         # at capture-pixel size from (0, 0), so the visible part stays 1:1.
@@ -83,8 +129,14 @@ class SelectionOverlay:
         dimmed = Image.blend(
             bright, Image.new("RGB", bright.size, "black"), VEIL_ALPHA
         )
-        self._photos = (ImageTk.PhotoImage(bright), ImageTk.PhotoImage(dimmed))
+        assert self._image_tk is not None
+        self._photos = (
+            self._image_tk.PhotoImage(bright),
+            self._image_tk.PhotoImage(dimmed),
+        )
 
+        tk = self._tk
+        assert tk is not None
         canvas = tk.Canvas(
             root,
             width=width,
@@ -137,7 +189,7 @@ class SelectionOverlay:
 
     # -- interaction ------------------------------------------------------- #
 
-    def _on_press(self, event: tk.Event) -> None:
+    def _on_press(self, event: Any) -> None:
         if self._canvas is None or self._image_item is None:
             return
         self._start = (event.x, event.y)
@@ -146,12 +198,12 @@ class SelectionOverlay:
         self._canvas.itemconfigure(self._image_item, image=self._photos[0])
         self._paint(event.x, event.y, event.x, event.y)
 
-    def _on_drag(self, event: tk.Event) -> None:
+    def _on_drag(self, event: Any) -> None:
         if self._start is None:
             return
         self._paint(self._start[0], self._start[1], event.x, event.y)
 
-    def _on_release(self, event: tk.Event) -> None:
+    def _on_release(self, event: Any) -> None:
         if self._start is None:
             return
         box = self._to_image_box(self._start[0], self._start[1], event.x, event.y)
@@ -161,7 +213,7 @@ class SelectionOverlay:
         self._box = box
         self._close()
 
-    def _on_cancel(self, _event: tk.Event | None = None) -> None:
+    def _on_cancel(self, _event: Any = None) -> None:
         self._cancel()
 
     # -- painting ---------------------------------------------------------- #
@@ -180,8 +232,12 @@ class SelectionOverlay:
         if self._canvas is None:
             return
         screen_width, screen_height = self._viewport_size()
-        left, right = sorted((max(0, min(x1, screen_width)), max(0, min(x2, screen_width))))
-        top, bottom = sorted((max(0, min(y1, screen_height)), max(0, min(y2, screen_height))))
+        left, right = sorted(
+            (max(0, min(x1, screen_width)), max(0, min(x2, screen_width)))
+        )
+        top, bottom = sorted(
+            (max(0, min(y1, screen_height)), max(0, min(y2, screen_height)))
+        )
 
         canvas = self._canvas
         canvas.coords(self._veil[0], 0, 0, screen_width, top)
@@ -228,6 +284,8 @@ class SelectionOverlay:
 
     def _to_image_box(self, x1: float, y1: float, x2: float, y2: float) -> Box:
         scale = self._scale
+        from .capture import normalize_box
+
         return normalize_box(
             (x1 * scale, y1 * scale, x2 * scale, y2 * scale), self._image.size
         )
@@ -239,19 +297,19 @@ class SelectionOverlay:
         self._close()
 
     def _close(self) -> None:
-        if self._root is None:
+        if self._root is None or self._tk is None:
             return
         try:
             self._root.quit()
-        except tk.TclError:  # pragma: no cover - window already gone
+        except self._tk.TclError:  # pragma: no cover - window already gone
             pass
 
     def _destroy(self) -> None:
-        if self._root is None:
+        if self._root is None or self._tk is None:
             return
         try:
             self._root.destroy()
-        except tk.TclError:  # pragma: no cover
+        except self._tk.TclError:  # pragma: no cover
             pass
         finally:
             self._root = None

@@ -36,7 +36,16 @@ setup(
         "py2app": {
             "argv_emulation": False,
             "packages": ["screen_ocr", "screen_ocr.ocr", "pynput"],
-            "includes": ["Vision", "Quartz", "pynput.*"],
+            "includes": [
+                "AppKit",
+                "Cocoa",
+                "CoreMedia",
+                "Quartz",
+                "ScreenCaptureKit",
+                "Vision",
+                "objc",
+                "pynput.*",
+            ],
             "excludes": ["pytest", "pytest_cov", "tkinter.test"],
             "plist": {
                 "CFBundleName": "stt",

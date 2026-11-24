@@ -31,6 +31,8 @@ dependencies = [
 mac = [
     "pyobjc-framework-Vision>=10.0",
     "pyobjc-framework-Quartz>=10.0",
+    "pyobjc-framework-Cocoa>=10.0",
+    "pyobjc-framework-ScreenCaptureKit>=13.0",
 ]
 win = ["winsdk>=1.0.0b10"]
 tesseract = ["pytesseract>=0.3.10"]

@@ -23,11 +23,12 @@ Cross-platform: **macOS** (Apple Silicon / Intel) and **Windows**.
 └──────────────────────────────────────────────────────────┘
 ```
 
-> **Status: Phases 0–2 and 4 complete.** `uv run stt` works end-to-end on macOS: the desktop is
-> grabbed into memory, you drag a box, Apple Vision reads it, indentation is reconstructed, and the
-> text lands on your clipboard. 69 tests cover the layout engine, capture invariants, the selection
-> overlay, the full pipeline and the hotkey daemon. Phase 4 adds `stt listen`, `--indent tabs`, and
-> build configs for a `.app` / `.exe`. Windows OCR (Phase 3) is written but **unverified**.
+> **Status: Phases 0–2 and 4 complete; macOS capture/overlay rewritten.** `uv run stt` works
+> end-to-end on macOS: ScreenCaptureKit grabs the desktop into memory, a native AppKit overlay lets
+> you drag a box, Apple Vision reads it, indentation is reconstructed, and the text lands on your
+> clipboard. 92 tests cover the layout engine, capture invariants, both selection overlays, the full
+> pipeline and the hotkey daemon. Windows still uses `mss` + Tk + `Windows.Media.Ocr` unchanged;
+> Phase 3 remains **unverified** on real hardware.
 
 ---
 
@@ -76,25 +77,33 @@ program does not know or care which one ran.
 
 ### 2. Frozen-desktop overlay, not a translucent tint
 
-The obvious approach — a 25%-alpha fullscreen window over the live screen, then map Tk coordinates
-to physical pixels — is the classic source of two bugs: the tint ends up baked into the capture, and
-Retina/DPI scaling drifts (Tk reports points, captures are pixels).
+The obvious approach — a translucent window over the live screen, then map UI coordinates to
+physical pixels — is the classic source of two bugs: the tint ends up baked into the capture, and
+Retina/DPI scaling drifts (the toolkit reports points, captures are pixels).
 
 Instead:
 
-1. Grab the desktop into memory **first** (`PIL.Image`, via `mss`).
-2. Show that image in a borderless fullscreen Tk window with a dimming veil and a Canvas selection
-   rectangle.
+1. Grab the desktop into memory **first**:
+   - macOS: ScreenCaptureKit → `CGImage` → `PIL.Image` (backing-store pixels).
+   - Windows: `mss` → `PIL.Image` (nominal pixels).
+2. Show a frozen preview with a dimming veil and a selection rectangle:
+   - macOS: a borderless full-screen **AppKit** window.
+   - Windows: a full-screen **Tk** canvas.
 3. On mouse release, `img.crop(box)` — the rectangle is *already* in captured-image pixels.
 
-This gives us, for free:
+This gives us:
 
-- **zero coordinate/scale math** — no 2× Retina correction anywhere
+- **no scaling in the crop path** — `selection_state.py` maps the drag once; the caller just crops
 - **no tint in the output** — pixels were grabbed before anything was drawn
 - **the "imaginary screenshot" rule holds trivially** — the image never leaves RAM
-- **one window, one code path** — no per-monitor geometry gymnastics on the happy path
+- **one interaction model on both OSes** — Esc / tiny drag / close all cancel
 
-Cost: the full desktop is grabbed even if you press `Esc` (~10 ms, tens of MB, freed immediately).
+ScreenCaptureKit captures at backing resolution (a 1470×956-point Mac display yields a 2940×1912
+image). The native overlay derives `image.width / window.width` **only** to draw the preview; the
+crop stays in image pixels. That is the sole scale factor in the project, and it never touches the
+saved text.
+
+Cost: the full desktop is grabbed even if you press `Esc` (tens of MB, freed immediately).
 
 ### 3. Layout reconstruction is a pure function
 
@@ -104,7 +113,8 @@ no OCR flakiness** — synthetic boxes in, expected text out.
 
 ### 4. Zero disk writes, ever
 
-- `mss` frames → `PIL.Image.frombytes(...)` directly.
+- ScreenCaptureKit frames → `NSBitmapImageRep` → PNG bytes in `BytesIO` → `PIL.Image`.
+- `mss` frames → `PIL.Image.frombytes(...)` directly (Windows and fallback).
 - Preprocessing (upscale, grayscale, contrast) in RAM only.
 - No `.png`/`.jpg`, no temp directories, not even for debugging. `--debug` prints **text** to
   stdout instead of copying.
@@ -124,8 +134,10 @@ screen_to_text/
 │       ├── __init__.py
 │       ├── main.py            # CLI: `stt`, `stt grab`, `stt listen`, `stt demo`, `stt doctor`
 │       ├── models.py          # Token(text, left, top, width, height, conf)
-│       ├── capture.py         # desktop grab + crop, all in RAM
-│       ├── overlay.py         # frozen-desktop selection UI (Tk + Canvas)
+│       ├── capture.py         # ScreenCaptureKit/mss grab + crop, all in RAM
+│       ├── overlay.py         # overlay API + Windows Tk implementation
+│       ├── overlay_macos.py   # native AppKit/Quartz selection window
+│       ├── selection_state.py # pure drag-point → image-pixel mapping
 │       ├── layout.py          # geometry → indented text  (PURE, no I/O)
 │       ├── clipboard.py       # text-only injection, silent on empty
 │       ├── hotkey.py          # pynput daemon; queues events, grabs on the main thread
@@ -146,7 +158,9 @@ screen_to_text/
     ├── test_layout.py         # synthetic boxes, golden strings
     ├── test_layout_render.py  # render real code to PIL, round-trip
     ├── test_capture.py        # scale/crop invariants, no disk artifacts
-    ├── test_overlay.py        # selection UI, both cancel paths
+    ├── test_overlay.py        # Windows/Tk selection UI, both cancel paths
+    ├── test_overlay_macos.py  # native AppKit selection UI and cancel paths
+    ├── test_selection_state.py  # pure drag → pixel geometry
     ├── test_grab_integration.py  # full overlay → OCR → clipboard chain
     ├── test_hotkey.py         # daemon wiring with a scripted listener
     └── test_cli.py            # exit codes and argument wiring
@@ -155,8 +169,8 @@ screen_to_text/
 Data flow, precisely:
 
 ```python
-img  = capture.grab_desktop()                    # mss → PIL, RAM only
-box  = overlay.select(img)                       # None if Esc
+img  = capture.grab_desktop()                    # SCK (mac) / mss (win) → PIL, RAM only
+box  = overlay.SelectionOverlay(img).run()        # None if Esc
 if box is None: return                           # clipboard untouched
 crop = capture.crop(img, box)                    # pure crop, 1:1 pixels
 toks = backend.read_tokens(crop)                 # list[Token], engine-specific
@@ -237,7 +251,8 @@ Output: a `str` with no trailing newline.
 ## Installation
 
 Requires **Python 3.12 or 3.13** (pinned in the venv; the machine's default 3.15 is too new for
-reliable `pyobjc` / `onnxruntime` wheels).
+reliable `pyobjc` wheels). The native capture path needs **macOS 13+** for ScreenCaptureKit; older
+Macs fall back to `mss` + `screencapture`.
 
 ```bash
 # macOS
@@ -361,17 +376,21 @@ token table, so you can see exactly why a column collapsed.
 - A blank capture is ambiguous: it means either the permission is missing **or** the display is
   asleep/locked. The error message says both, rather than sending you on a permissions hunt when
   your Mac was simply idle.
-- The overlay uses Tk's native fullscreen mode. On macOS the menu bar stays visible and the preview
-  is drawn from the top of the captured image, so what you see under the veil is exactly what gets
-  cropped — still 1:1, no Retina math.
-- **Retina is a non-issue.** `mss` 10.x captures at *nominal* resolution
-  (`kCGWindowImageNominalResolution`), so a 1470×956-point display yields a 1470×956 image: capture
-  pixels and Tk points are the same space. If a future backend ever returns backing-store pixels,
-  the overlay derives a display scale from `image.width / screen.width` — that factor is used only
-  to draw the preview; the crop is always expressed in image pixels.
-- `mss` relies on `CGWindowListCreateImage`, which is deprecated on recent macOS. The
-  `screencapture -x -t png -R … -` fallback is **already wired in**: it runs automatically when the
-  `mss` frame comes back blank on macOS, and it also writes nothing to disk (PNG over stdout → PIL).
+- Capture uses **ScreenCaptureKit** (`SCScreenshotManager`, macOS 13+) and returns backing-store
+  pixels — 2940×1912 for a 1470×956-point display. The image is converted to PIL through an
+  in-memory PNG buffer; nothing is written to disk.
+- The selection window is a native **AppKit** borderless full-screen window at status level (below
+  system dialogs). It draws the frozen capture under a dark veil, brightens the drag rectangle, and
+  shows its size. Esc, right-click, window-close, mouse-up outside the window and tiny drags all
+  cancel; an event-handler error also closes it instead of trapping the desktop.
+- **Retina is a non-issue for the crop.** `selection_state.py` derives
+  `image.width / window.width` solely to map pointer points onto the preview. The box handed to
+  `crop()` is already in image pixels; there is no second conversion.
+- `mss` relies on `CGWindowListCreateImage`, which is deprecated on recent macOS. It remains as a
+  fallback when ScreenCaptureKit is unavailable (older macOS), and the
+  `screencapture -x -t png -R … -` fallback runs when a frame comes back blank. Both stay
+  disk-free.
+- Tk is not imported on macOS; the native overlay is used instead.
 
 ### Windows
 
@@ -414,16 +433,19 @@ token lists that mimic real geometry:
 (`Menlo` / `Consolas`) via Pillow, runs it through whichever backend is available, and asserts the
 text matches **exactly**. Skipped automatically when no backend is installed.
 
-**Overlay geometry (`tests/test_overlay.py`).** Opens a real Tk window and synthesises the drag, so
-the mapping from what you dragged to what gets cropped is verified at 1× and at 2× (the Retina case),
-including clamping and cancel paths. Skipped when no display is available.
+**Overlay geometry (`tests/test_overlay.py`, `tests/test_overlay_macos.py`,
+`tests/test_selection_state.py`).** The pure state tests check the point→pixel mapping at 1× and 2×
+without a window. The Tk suite (Windows path) and the native AppKit suite (macOS path) each open a
+real window and synthesise drags, clamping, Esc, window-close and tiny-drag cancels. Skipped when no
+display is available.
 
 **Full pipeline (`tests/test_grab_integration.py`).** Only the desktop image and the clipboard are
 faked — a rendered snippet is pasted onto a screen-sized canvas, a scripted drag selects it, and the
 real overlay → crop → Vision → layout → copy path has to reproduce the source byte for byte.
 
-**Capture invariants (`tests/test_capture.py`).** `crop()` is 1:1 (output size equals box size) and
-a capture in a temporary cwd leaves the directory empty.
+**Capture invariants (`tests/test_capture.py`).** `crop()` is 1:1 (output size equals box size),
+macOS dispatch selects ScreenCaptureKit with an `mss` fallback, and a grab in a temporary cwd
+leaves the directory empty.
 
 **Manual acceptance.** Open a source file with 3+ indentation levels, select it with `uv run stt`,
 paste into an editor with soft-wrap disabled, and diff. Target: zero diffs on monospace code.
@@ -435,11 +457,10 @@ paste into an editor with soft-wrap disabled, and diff. Target: zero diffs on mo
 1. **Windows hardware.** `ocr/windows.py` is written against `winsdk`'s `Windows.Media.Ocr` but has
    never run on Windows. It is wrapped so that any failure degrades to
    `stt grab --engine tesseract` instead of crashing. Needs a real PC to call it done.
-2. **Multi-monitor.** v1 captures and overlays the **primary display only**. Multi-display support
-   (one overlay window per display, enumerated via Quartz `CGGetActiveDisplayList`, each positioned
-   in the global coordinate space) is a phase 2.5 item — the one part of `AGENTS.md` that Tk makes
-   genuinely awkward. The frozen-desktop design keeps the *coordinates* trivial; only window
-   placement is fiddly.
+2. **Multi-monitor.** v1 captures and overlays the **primary display only**. ScreenCaptureKit already
+   enumerates all displays; adding one native AppKit window per display (positioned in global
+   coordinates) is a phase 2.5 item. The frozen-desktop design keeps the *coordinates* trivial;
+   only window placement is fiddly.
 3. **Hotkey verification.** `stt listen` and the bundled `.app` start cleanly, but the actual
    Cmd+Shift+2 grab needs Accessibility granted and a manual press on real hardware. If you would
    rather not grant it, bind `uv run stt` to a key in Raycast/Alfred/Automator (macOS) or a
