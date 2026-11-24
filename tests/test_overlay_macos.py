@@ -57,35 +57,20 @@ def test_event_point_uses_views_own_flipped_conversion() -> None:
     assert _point(event, View()) == (12.0, 12.0)
 
 
-def test_initial_draw_is_transparent(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_initial_draw_shows_frozen_image_without_veil(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     overlay = MacSelectionOverlay(_image())
     overlay._viewport = _screen_size()
-    fills: list[str] = []
-    outlines: list[Any] = []
+    drawn: list[Any] = []
 
-    class FakeFill:
-        def __init__(self, name: str) -> None:
-            self.name = name
+    class FakeImage:
+        def drawInRect_fromRect_operation_fraction_respectFlipped_hints_(
+            self, *_args: Any
+        ) -> None:
+            drawn.append(_args)
 
-        def setFill(self) -> None:
-            fills.append(self.name)
-
-    class FakeColor:
-        @staticmethod
-        def clearColor() -> FakeFill:
-            return FakeFill("clear")
-
-    class FakePath:
-        @staticmethod
-        def bezierPathWithRect_(rect: Any) -> Any:
-            outlines.append(rect)
-            return FakePath()
-
-        def setLineWidth_(self, _width: float) -> None:
-            pass
-
-        def stroke(self) -> None:
-            pass
+    overlay._bright = FakeImage()
 
     class FakeGraphicsContext:
         @staticmethod
@@ -100,18 +85,13 @@ def test_initial_draw_is_transparent(monkeypatch: pytest.MonkeyPatch) -> None:
         def restoreGraphicsState() -> None:
             pass
 
-    monkeypatch.setattr("screen_ocr.overlay_macos.NSColor", FakeColor)
-    monkeypatch.setattr("screen_ocr.overlay_macos.NSBezierPath", FakePath)
     monkeypatch.setattr(
         "screen_ocr.overlay_macos.NSGraphicsContext", FakeGraphicsContext
     )
-    monkeypatch.setattr(
-        "screen_ocr.overlay_macos.NSRectFill", lambda _rect: None
-    )
 
     overlay.draw()
-    assert fills == ["clear"]  # only a transparent clear, no veil
-    assert outlines == []  # no outline before the first drag
+    assert len(drawn) == 1  # the frozen desktop is drawn once
+    assert drawn[0][3] == 1.0  # full brightness, no veil/dimming
 
 
 class _OutsideEvent:

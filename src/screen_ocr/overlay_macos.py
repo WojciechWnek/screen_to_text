@@ -8,6 +8,7 @@ no Retina conversion in the crop path and no image written to disk.
 
 from __future__ import annotations
 
+import io
 from typing import Any
 
 from AppKit import (
@@ -18,6 +19,7 @@ from AppKit import (
     NSBezierPath,
     NSBorderlessWindowMask,
     NSColor,
+    NSCompositeSourceOver,
     NSCursor,
     NSEvent,
     NSEventMaskLeftMouseUp,
@@ -25,6 +27,7 @@ from AppKit import (
     NSFontAttributeName,
     NSForegroundColorAttributeName,
     NSGraphicsContext,
+    NSImage,
     NSMakePoint,
     NSMakeRect,
     NSObject,
@@ -77,7 +80,7 @@ class _OverlayWindow(NSWindow):  # type: ignore[misc]
 
 
 class _SelectionView(NSView):  # type: ignore[misc]
-    """Transparent view that forwards pointer/key events to its owner."""
+    """Draws the frozen preview and forwards pointer/key events to its owner."""
 
     def isFlipped(self) -> bool:
         # All pointer coordinates then have a top-left origin, like the image.
@@ -142,6 +145,13 @@ def _point(event: Any, view: Any) -> tuple[float, float]:
     return float(local.x), float(local.y)
 
 
+def _ns_image(image: Image.Image) -> Any:
+    """Convert a PIL image to NSImage through an in-memory PNG buffer."""
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return NSImage.alloc().initWithData_(buffer.getvalue())
+
+
 def schedule(delay: float, callback: Any) -> Any:
     """Run ``callback`` during a modal overlay loop.
 
@@ -175,6 +185,7 @@ class MacSelectionOverlay:
         self._box: Box | None = None
         self._viewport = (0, 0)
         self._state = SelectionState(self._image.size, (1, 1))
+        self._bright: Any | None = None
 
     # -- public API ------------------------------------------------------- #
 
@@ -204,6 +215,12 @@ class MacSelectionOverlay:
             self._build(frame, width, height)
             self._app.activateIgnoringOtherApps_(True)
             self._schedule_auto_close()
+            # runModalForWindow_ drops the window to modal-panel level (8),
+            # below the menu bar (24). Re-raise it above the menu bar so the
+            # frozen preview is not doubled by the live one.
+            schedule(
+                0.01, lambda _timer: self._window.setLevel_(kCGStatusWindowLevel)
+            )
 
             self._modal = True
             self._app.runModalForWindow_(self._window)
@@ -224,14 +241,13 @@ class MacSelectionOverlay:
     # -- construction ------------------------------------------------------ #
 
     def _build(self, frame: Any, width: int, height: int) -> None:
+        self._bright = _ns_image(self._image)
+
         window = _OverlayWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             frame, NSBorderlessWindowMask, NSBackingStoreBuffered, False
         )
         window.setLevel_(kCGStatusWindowLevel)
-        # The live desktop stays visible: only the selection rectangle is drawn.
-        # Clear backing avoids a white flash before the first draw.
-        window.setOpaque_(False)
-        window.setBackgroundColor_(NSColor.clearColor())
+        window.setOpaque_(True)
         window.setCollectionBehavior_(
             NSWindowCollectionBehaviorCanJoinAllSpaces
             | NSWindowCollectionBehaviorFullScreenAuxiliary
@@ -241,7 +257,6 @@ class MacSelectionOverlay:
         view = _SelectionView.alloc().initWithFrame_(
             NSMakeRect(0, 0, float(width), float(height))
         )
-        view.setWantsLayer_(True)
         view.owner = self
         window.setContentView_(view)
 
@@ -323,15 +338,20 @@ class MacSelectionOverlay:
             self._view.setNeedsDisplay_(True)
 
     def draw(self) -> None:
-        """Clear to transparent and draw only the selection outline and label."""
+        """Draw the frozen preview at full brightness with only the selection."""
         if NSGraphicsContext.currentContext() is None:
             return
         width, height = self._viewport
         target = NSMakeRect(0, 0, float(width), float(height))
+        source = NSMakeRect(0, 0, float(self._image.width), float(self._image.height))
         NSGraphicsContext.saveGraphicsState()
         try:
-            NSColor.clearColor().setFill()
-            NSRectFill(target)
+            # The frozen capture is the OCR source; show it undimmed so the
+            # live desktop underneath is not doubled or veiled.
+            if self._bright is not None:
+                self._bright.drawInRect_fromRect_operation_fraction_respectFlipped_hints_(
+                    target, source, NSCompositeSourceOver, 1.0, True, None
+                )
 
             selection = self._state.selection_points()
             if selection is None:
