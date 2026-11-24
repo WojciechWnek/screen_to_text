@@ -57,6 +57,13 @@ def test_event_point_uses_views_own_flipped_conversion() -> None:
     assert _point(event, View()) == (12.0, 12.0)
 
 
+def test_native_veil_is_lighter_than_the_windows_veil() -> None:
+    from screen_ocr.selection_state import MAC_VEIL_ALPHA, VEIL_ALPHA
+
+    assert 0 < MAC_VEIL_ALPHA < VEIL_ALPHA
+    assert MAC_VEIL_ALPHA <= 0.25
+
+
 class _OutsideEvent:
     """Stands in for a release over another window/display."""
 

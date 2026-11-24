@@ -380,9 +380,10 @@ token table, so you can see exactly why a column collapsed.
   pixels — 2940×1912 for a 1470×956-point display. The image is converted to PIL through an
   in-memory PNG buffer; nothing is written to disk.
 - The selection window is a native **AppKit** borderless full-screen window at status level (below
-  system dialogs). It draws the frozen capture under a dark veil, brightens the drag rectangle, and
-  shows its size. Esc, right-click, window-close, mouse-up outside the window and tiny drags all
-  cancel; an event-handler error also closes it instead of trapping the desktop.
+  system dialogs). It draws the frozen capture at full brightness, lays a single light veil (20%)
+  over everything outside the selection, and shows the drag rectangle with its size. Esc,
+  right-click, window-close, mouse-up outside the window and tiny drags all cancel; an
+  event-handler error also closes it instead of trapping the desktop.
 - **Retina is a non-issue for the crop.** `selection_state.py` derives
   `image.width / window.width` solely to map pointer points onto the preview. The box handed to
   `crop()` is already in image pixels; there is no second conversion.

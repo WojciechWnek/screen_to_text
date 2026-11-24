@@ -47,7 +47,7 @@ from Quartz import kCGStatusWindowLevel
 
 from .capture import Box
 from .overlay import OverlayError
-from .selection_state import VEIL_ALPHA, SelectionState
+from .selection_state import MAC_VEIL_ALPHA, SelectionState
 
 _ESCAPE_KEYCODE = 53
 
@@ -186,7 +186,6 @@ class MacSelectionOverlay:
         self._viewport = (0, 0)
         self._state = SelectionState(self._image.size, (1, 1))
         self._bright: Any | None = None
-        self._dim: Any | None = None
 
     # -- public API ------------------------------------------------------- #
 
@@ -236,11 +235,7 @@ class MacSelectionOverlay:
     # -- construction ------------------------------------------------------ #
 
     def _build(self, frame: Any, width: int, height: int) -> None:
-        dimmed = Image.blend(
-            self._image, Image.new("RGB", self._image.size, "black"), VEIL_ALPHA
-        )
         self._bright = _ns_image(self._image)
-        self._dim = _ns_image(dimmed)
 
         window = _OverlayWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             frame, NSBorderlessWindowMask, NSBackingStoreBuffered, False
@@ -349,29 +344,20 @@ class MacSelectionOverlay:
         )
         NSGraphicsContext.saveGraphicsState()
         try:
-            if self._dim is not None:
-                self._dim.drawInRect_fromRect_operation_fraction_respectFlipped_hints_(
+            # Draw the frozen desktop at full brightness once, then lay a
+            # single light veil over everything outside the selection.
+            if self._bright is not None:
+                self._bright.drawInRect_fromRect_operation_fraction_respectFlipped_hints_(
                     target, source, NSCompositeSourceOver, 1.0, True, None
                 )
 
             selection = self._state.selection_points()
+            NSColor.colorWithCalibratedWhite_alpha_(0.0, MAC_VEIL_ALPHA).setFill()
             if selection is None:
+                NSRectFill(target)
                 return
             left, top, right, bottom = selection
 
-            NSGraphicsContext.saveGraphicsState()
-            try:
-                NSBezierPath.bezierPathWithRect_(
-                    NSMakeRect(left, top, right - left, bottom - top)
-                ).setClip()
-                if self._bright is not None:
-                    self._bright.drawInRect_fromRect_operation_fraction_respectFlipped_hints_(
-                        target, source, NSCompositeSourceOver, 1.0, True, None
-                    )
-            finally:
-                NSGraphicsContext.restoreGraphicsState()
-
-            NSColor.colorWithCalibratedWhite_alpha_(0.0, VEIL_ALPHA).setFill()
             for x1, y1, x2, y2 in self._state.veil_rects():
                 NSRectFill(NSMakeRect(x1, y1, x2 - x1, y2 - y1))
 
@@ -454,4 +440,3 @@ class MacSelectionOverlay:
         self._view = None
         self._window_delegate = None
         self._bright = None
-        self._dim = None

@@ -12,8 +12,13 @@ from .capture import Box, normalize_box
 #: A drag smaller than this (in image pixels) counts as a cancel.
 MIN_SELECTION_PX = 4
 
-#: How much to darken the desktop outside the selection.
+#: How much to darken the desktop outside the selection (Windows/Tk veil).
 VEIL_ALPHA = 0.45
+
+#: Lighter, single-pass veil used by the native macOS overlay. Applying the
+#: veil once (not twice) keeps the preview readable while still marking the
+#: area outside the drag.
+MAC_VEIL_ALPHA = 0.20
 
 
 class SelectionState:

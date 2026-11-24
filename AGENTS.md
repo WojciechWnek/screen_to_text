@@ -203,7 +203,8 @@ Required edge-case behaviour:
   both, or you will send users chasing a permission that is already granted.
 - The overlay is a native borderless AppKit window at `kCGStatusWindowLevel` (high enough to cover
   apps, low enough that system dialogs and Force Quit stay reachable), with a flipped `NSView`,
-  dimmed frozen image, bright selection, cyan outline and size label. It is *not* Tk.
+  full-brightness frozen image, a single light veil (20%, `MAC_VEIL_ALPHA`) outside the selection,
+  cyan outline and size label. It is *not* Tk.
   Cancel on Escape, right-click, window-close, global mouse-up outside the window, auto-close (test
   hook) and zero-area/tiny drags. `NSRunLoopCommonModes` is required for timers to fire during
   `runModalForWindow_`. PyObjC 13 has no `-[NSEvent locationInView:]`; pass `locationInWindow`
