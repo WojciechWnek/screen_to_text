@@ -1,0 +1,50 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "screen-text-grab"
+version = "0.1.0"
+description = "Select a region of the screen, get the text inside it on your clipboard with indentation preserved."
+readme = "README.md"
+requires-python = ">=3.12,<3.14"
+license = "MIT"
+authors = [{ name = "Wojciech Wnek" }]
+keywords = ["ocr", "screenshot", "clipboard", "indentation", "text"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: X11 Applications",
+    "Intended Audience :: Developers",
+    "Operating System :: MacOS",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Text Processing",
+]
+dependencies = [
+    "mss>=9.0",
+    "pillow>=10.0",
+    "pyperclip>=1.8",
+]
+
+[project.optional-dependencies]
+mac = [
+    "pyobjc-framework-Vision>=10.0",
+    "pyobjc-framework-Quartz>=10.0",
+]
+win = ["winsdk>=1.0.0b10"]
+tesseract = ["pytesseract>=0.3.10"]
+dev = ["pytest>=8.0", "pytest-cov>=5.0"]
+
+[project.scripts]
+stt = "screen_ocr.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/screen_ocr"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.coverage.run]
+source = ["screen_ocr"]

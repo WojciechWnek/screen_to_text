@@ -1,0 +1,74 @@
+[
+  {
+    "text": "name",
+    "left": 0.0,
+    "top": 0.0,
+    "width": 36.0,
+    "height": 18.0,
+    "conf": 0.95
+  },
+  {
+    "text": "age",
+    "left": 90.0,
+    "top": 0.0,
+    "width": 27.0,
+    "height": 18.0,
+    "conf": 0.95
+  },
+  {
+    "text": "city",
+    "left": 144.0,
+    "top": 0.0,
+    "width": 36.0,
+    "height": 18.0,
+    "conf": 0.95
+  },
+  {
+    "text": "alice",
+    "left": 0.0,
+    "top": 18.0,
+    "width": 45.0,
+    "height": 18.0,
+    "conf": 0.95
+  },
+  {
+    "text": "30",
+    "left": 90.0,
+    "top": 18.0,
+    "width": 18.0,
+    "height": 18.0,
+    "conf": 0.95
+  },
+  {
+    "text": "oslo",
+    "left": 144.0,
+    "top": 18.0,
+    "width": 36.0,
+    "height": 18.0,
+    "conf": 0.95
+  },
+  {
+    "text": "bob",
+    "left": 0.0,
+    "top": 36.0,
+    "width": 27.0,
+    "height": 18.0,
+    "conf": 0.95
+  },
+  {
+    "text": "41",
+    "left": 90.0,
+    "top": 36.0,
+    "width": 18.0,
+    "height": 18.0,
+    "conf": 0.95
+  },
+  {
+    "text": "lima",
+    "left": 144.0,
+    "top": 36.0,
+    "width": 36.0,
+    "height": 18.0,
+    "conf": 0.95
+  }
+]

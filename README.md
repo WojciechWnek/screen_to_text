@@ -23,7 +23,10 @@ Cross-platform: **macOS** (Apple Silicon / Intel) and **Windows**.
 └──────────────────────────────────────────────────────────┘
 ```
 
-> **Status: planned, not yet implemented.** This document is the spec and the build plan.
+> **Status: Phase 0 and 1 complete** — project scaffold and the layout engine are implemented and
+> tested (31 tests). Screen capture, the selection overlay and OCR backends are Phase 2, so
+> `stt grab` currently prints a "not wired up yet" notice. You *can* already test the part that
+> matters most: `uv run stt layout examples/sample_tokens.json`.
 
 ---
 
@@ -244,9 +247,33 @@ winget install UB-Mannheim.TesseractOCR  # Windows
 ## Usage
 
 ```bash
-uv run stt              # select a region → text is on your clipboard
+uv run stt              # select a region → text is on your clipboard  (Phase 2)
 uv run stt --debug      # print the reconstructed text + token boxes instead of copying
 uv run stt doctor       # check permissions, engine availability, DPI scale, monitor layout
+```
+
+### Try the layout engine today (no screen access needed)
+
+Phases 0 and 1 are done, so the indentation algorithm is already usable. Feed it token geometry as
+JSON and it prints the reconstructed text:
+
+```bash
+uv run stt layout examples/sample_tokens.json
+```
+
+```text
+def process(items):
+    for item in items:
+        if item.active:
+            results.append(item)
+    return results
+```
+
+Add `--show-tokens` to see the parsed bounding boxes on stderr, or pipe JSON on stdin:
+
+```bash
+echo '[{"text":"a","left":0,"top":0,"width":9,"height":18},
+       {"text":"b","left":90,"top":0,"width":9,"height":18}]' | uv run stt layout
 ```
 
 Then paste anywhere with `Cmd+V` / `Ctrl+V`.

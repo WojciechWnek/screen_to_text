@@ -11,7 +11,10 @@ capture, drags a rectangle over the screen, and the text inside that rectangle i
 **indentation, internal spacing and blank lines preserved**, then copied to the clipboard as plain
 text — nothing else. The screenshot is never written to disk.
 
-Status: **specification only. No implementation yet.** Start at Phase 0 of the build plan.
+Status: **Phases 0 and 1 are complete** — scaffold, pure layout engine and the `stt` CLI
+(`grab`, `layout`, `doctor`) exist, with 31 tests green. Screen capture, the selection overlay and
+the OCR backends are **Phase 2**; `stt grab` deliberately exits 1 with a "not wired up yet" notice.
+Start there.
 
 ## Locked decisions (do not re-litigate these without asking the user)
 
@@ -198,6 +201,8 @@ Required edge-case behaviour:
 - Run `uv run pytest` before declaring any phase done.
 
 ## Build plan (work in this order)
+
+Phases 0 and 1 are done (31 tests green); Phase 2 is next.
 
 | Phase | Work | Done when |
 | --- | --- | --- |

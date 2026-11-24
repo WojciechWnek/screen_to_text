@@ -1,0 +1,90 @@
+[
+  {
+    "text": "def",
+    "left": 0.0,
+    "top": 0.0,
+    "width": 27.0,
+    "height": 18.0,
+    "conf": 0.97
+  },
+  {
+    "text": "process(items):",
+    "left": 36.0,
+    "top": 0.0,
+    "width": 135.0,
+    "height": 18.0,
+    "conf": 0.97
+  },
+  {
+    "text": "for",
+    "left": 36.0,
+    "top": 18.0,
+    "width": 27.0,
+    "height": 18.0,
+    "conf": 0.97
+  },
+  {
+    "text": "item",
+    "left": 72.0,
+    "top": 18.0,
+    "width": 36.0,
+    "height": 18.0,
+    "conf": 0.97
+  },
+  {
+    "text": "in",
+    "left": 117.0,
+    "top": 18.0,
+    "width": 18.0,
+    "height": 18.0,
+    "conf": 0.97
+  },
+  {
+    "text": "items:",
+    "left": 144.0,
+    "top": 18.0,
+    "width": 54.0,
+    "height": 18.0,
+    "conf": 0.97
+  },
+  {
+    "text": "if",
+    "left": 72.0,
+    "top": 36.0,
+    "width": 18.0,
+    "height": 18.0,
+    "conf": 0.97
+  },
+  {
+    "text": "item.active:",
+    "left": 99.0,
+    "top": 36.0,
+    "width": 108.0,
+    "height": 18.0,
+    "conf": 0.97
+  },
+  {
+    "text": "results.append(item)",
+    "left": 108.0,
+    "top": 54.0,
+    "width": 180.0,
+    "height": 18.0,
+    "conf": 0.97
+  },
+  {
+    "text": "return",
+    "left": 36.0,
+    "top": 72.0,
+    "width": 54.0,
+    "height": 18.0,
+    "conf": 0.97
+  },
+  {
+    "text": "results",
+    "left": 99.0,
+    "top": 72.0,
+    "width": 63.0,
+    "height": 18.0,
+    "conf": 0.97
+  }
+]
