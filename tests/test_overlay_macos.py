@@ -64,6 +64,35 @@ def test_native_veil_is_lighter_than_the_windows_veil() -> None:
     assert MAC_VEIL_ALPHA <= 0.25
 
 
+def test_initial_draw_has_no_veil(monkeypatch: pytest.MonkeyPatch) -> None:
+    overlay = MacSelectionOverlay(_image())
+    overlay._viewport = _screen_size()
+    fills: list[Any] = []
+
+    class FakeGraphicsContext:
+        @staticmethod
+        def currentContext() -> object:
+            return object()
+
+        @staticmethod
+        def saveGraphicsState() -> None:
+            pass
+
+        @staticmethod
+        def restoreGraphicsState() -> None:
+            pass
+
+    monkeypatch.setattr(
+        "screen_ocr.overlay_macos.NSGraphicsContext", FakeGraphicsContext
+    )
+    monkeypatch.setattr(
+        "screen_ocr.overlay_macos.NSRectFill", lambda rect: fills.append(rect)
+    )
+
+    overlay.draw()
+    assert fills == []  # no veil before the first drag
+
+
 class _OutsideEvent:
     """Stands in for a release over another window/display."""
 

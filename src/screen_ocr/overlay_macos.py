@@ -352,12 +352,14 @@ class MacSelectionOverlay:
                 )
 
             selection = self._state.selection_points()
-            NSColor.colorWithCalibratedWhite_alpha_(0.0, MAC_VEIL_ALPHA).setFill()
             if selection is None:
-                NSRectFill(target)
+                # Before the first drag, show the frozen desktop at full
+                # brightness: no veil, no outline. The veil appears only once
+                # the user starts selecting.
                 return
             left, top, right, bottom = selection
 
+            NSColor.colorWithCalibratedWhite_alpha_(0.0, MAC_VEIL_ALPHA).setFill()
             for x1, y1, x2, y2 in self._state.veil_rects():
                 NSRectFill(NSMakeRect(x1, y1, x2 - x1, y2 - y1))
 
