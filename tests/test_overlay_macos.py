@@ -57,17 +57,35 @@ def test_event_point_uses_views_own_flipped_conversion() -> None:
     assert _point(event, View()) == (12.0, 12.0)
 
 
-def test_native_veil_is_lighter_than_the_windows_veil() -> None:
-    from screen_ocr.selection_state import MAC_VEIL_ALPHA, VEIL_ALPHA
-
-    assert 0 < MAC_VEIL_ALPHA < VEIL_ALPHA
-    assert MAC_VEIL_ALPHA <= 0.25
-
-
-def test_initial_draw_has_no_veil(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_initial_draw_is_transparent(monkeypatch: pytest.MonkeyPatch) -> None:
     overlay = MacSelectionOverlay(_image())
     overlay._viewport = _screen_size()
-    fills: list[Any] = []
+    fills: list[str] = []
+    outlines: list[Any] = []
+
+    class FakeFill:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def setFill(self) -> None:
+            fills.append(self.name)
+
+    class FakeColor:
+        @staticmethod
+        def clearColor() -> FakeFill:
+            return FakeFill("clear")
+
+    class FakePath:
+        @staticmethod
+        def bezierPathWithRect_(rect: Any) -> Any:
+            outlines.append(rect)
+            return FakePath()
+
+        def setLineWidth_(self, _width: float) -> None:
+            pass
+
+        def stroke(self) -> None:
+            pass
 
     class FakeGraphicsContext:
         @staticmethod
@@ -82,15 +100,18 @@ def test_initial_draw_has_no_veil(monkeypatch: pytest.MonkeyPatch) -> None:
         def restoreGraphicsState() -> None:
             pass
 
+    monkeypatch.setattr("screen_ocr.overlay_macos.NSColor", FakeColor)
+    monkeypatch.setattr("screen_ocr.overlay_macos.NSBezierPath", FakePath)
     monkeypatch.setattr(
         "screen_ocr.overlay_macos.NSGraphicsContext", FakeGraphicsContext
     )
     monkeypatch.setattr(
-        "screen_ocr.overlay_macos.NSRectFill", lambda rect: fills.append(rect)
+        "screen_ocr.overlay_macos.NSRectFill", lambda _rect: None
     )
 
     overlay.draw()
-    assert fills == []  # no veil before the first drag
+    assert fills == ["clear"]  # only a transparent clear, no veil
+    assert outlines == []  # no outline before the first drag
 
 
 class _OutsideEvent:

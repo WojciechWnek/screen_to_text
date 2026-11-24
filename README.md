@@ -86,8 +86,8 @@ Instead:
 1. Grab the desktop into memory **first**:
    - macOS: ScreenCaptureKit → `CGImage` → `PIL.Image` (backing-store pixels).
    - Windows: `mss` → `PIL.Image` (nominal pixels).
-2. Show a frozen preview with a dimming veil and a selection rectangle:
-   - macOS: a borderless full-screen **AppKit** window.
+2. Show a selection rectangle:
+   - macOS: a transparent borderless full-screen **AppKit** window (no frozen preview, no veil).
    - Windows: a full-screen **Tk** canvas.
 3. On mouse release, `img.crop(box)` — the rectangle is *already* in captured-image pixels.
 
@@ -380,10 +380,11 @@ token table, so you can see exactly why a column collapsed.
   pixels — 2940×1912 for a 1470×956-point display. The image is converted to PIL through an
   in-memory PNG buffer; nothing is written to disk.
 - The selection window is a native **AppKit** borderless full-screen window at status level (below
-  system dialogs). It first shows the frozen capture at full brightness with no veil. Once you
-  start dragging, a single light veil (20%) covers everything outside the selection and the drag
-  rectangle and size are shown. Esc, right-click, window-close, mouse-up outside the window and
-  tiny drags all cancel; an event-handler error also closes it instead of trapping the desktop.
+  system dialogs). It is fully transparent: the live desktop stays visible and only a cyan
+  selection rectangle with its size is drawn. The frozen capture is never displayed — it is used
+  solely as the in-memory source for `crop()`. Esc, right-click, window-close, mouse-up outside the
+  window and tiny drags all cancel; an event-handler error also closes it instead of trapping the
+  desktop.
 - **Retina is a non-issue for the crop.** `selection_state.py` derives
   `image.width / window.width` solely to map pointer points onto the preview. The box handed to
   `crop()` is already in image pixels; there is no second conversion.

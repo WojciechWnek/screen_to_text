@@ -26,16 +26,18 @@ scope change, not a refactor.
    - Windows: **`Windows.Media.Ocr`** via `winsdk` (returns true word-level boxes).
    - Optional fallback: **Tesseract** via `pytesseract`, behind the `[tesseract]` extra only.
    - All behind one `OcrBackend` protocol returning `list[Token]`.
-2. **Frozen-desktop overlay, NOT a translucent tint.**
-   Grab the desktop into memory *first*, then display that image in a full-screen window with a
-   dimming veil and a selection rectangle. On mouse release, `image.crop(box)` — the box is already
-   in captured-image pixels.
-   - macOS: ScreenCaptureKit capture + a native AppKit/Quartz window. Tk must not be imported there.
+2. **Frozen capture as the crop source; macOS overlay is transparent.**
+   Grab the desktop into memory *first*. On mouse release, `image.crop(box)` — the box is already
+   in captured-image pixels. The captured image is never modified or darkened; it is the OCR
+   source, not necessarily something displayed.
+   - macOS: ScreenCaptureKit capture + a native AppKit/Quartz window. The window is fully transparent
+     and draws only the cyan selection rectangle and size label. Showing the frozen screenshot
+     produced a doubled nav bar (real chrome over the captured copy) and a grey veil; the user
+     explicitly asked to remove both. Tk must not be imported there.
    - Windows: `mss` capture + the existing Tk/Canvas window. Leave this path unchanged.
    - `selection_state.py` owns the one preview scale factor (`image.width / viewport.width`). It is
      used only to map pointer points to image pixels; never use it to rescale the crop or the text.
-   - This is why the captured image is never darkened by the overlay.
-   - Do not "simplify" this back into an alpha overlay over the live screen.
+   - This is why the captured image is never darkened and OCR always sees original pixels.
 3. **`layout.py` is a pure function.** `list[Token] -> str`. No I/O, no Tk, no OCR imports, no
    global state, no config file reads. All of the hard logic lives here and is tested without OCR.
 4. **Native AppKit** for the macOS overlay, **Tkinter** for the Windows overlay (no Qt, no webview).
@@ -202,10 +204,10 @@ Required edge-case behaviour:
 - A blank capture means *permission denied* **or** *display asleep/locked*. The hint must mention
   both, or you will send users chasing a permission that is already granted.
 - The overlay is a native borderless AppKit window at `kCGStatusWindowLevel` (high enough to cover
-  apps, low enough that system dialogs and Force Quit stay reachable), with a flipped `NSView` and
-  the frozen image at full brightness. No veil is drawn until the first drag; while dragging, a
-  single light veil (20%, `MAC_VEIL_ALPHA`) covers everything outside the cyan selection outline and
-  size label. It is *not* Tk.
+  apps, low enough that system dialogs and Force Quit stay reachable), with a flipped `NSView`. It is
+  fully transparent: the live desktop stays visible and only a cyan selection outline and size label
+  are drawn. The frozen capture is never displayed, so there is no doubled nav bar or grey veil.
+  It is *not* Tk.
   Cancel on Escape, right-click, window-close, global mouse-up outside the window, auto-close (test
   hook) and zero-area/tiny drags. `NSRunLoopCommonModes` is required for timers to fire during
   `runModalForWindow_`. PyObjC 13 has no `-[NSEvent locationInView:]`; pass `locationInWindow`

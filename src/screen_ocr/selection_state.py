@@ -15,11 +15,6 @@ MIN_SELECTION_PX = 4
 #: How much to darken the desktop outside the selection (Windows/Tk veil).
 VEIL_ALPHA = 0.45
 
-#: Lighter, single-pass veil used by the native macOS overlay. Applying the
-#: veil once (not twice) keeps the preview readable while still marking the
-#: area outside the drag.
-MAC_VEIL_ALPHA = 0.20
-
 
 class SelectionState:
     """Tracks one drag and maps it from viewport points to image pixels."""
@@ -92,20 +87,6 @@ class SelectionState:
         """The current drag mapped to image pixels, even before mouse-up."""
         rect = self.selection_points()
         return self._to_box(rect) if rect is not None else None
-
-    def veil_rects(self) -> tuple[tuple[float, float, float, float], ...]:
-        """Four rectangles covering everything outside the selection."""
-        selection = self.selection_points()
-        if selection is None:
-            return ()
-        width, height = self.viewport
-        left, top, right, bottom = selection
-        return (
-            (0.0, 0.0, width, top),
-            (0.0, bottom, width, height),
-            (0.0, top, left, bottom),
-            (right, top, width, bottom),
-        )
 
     def _to_box(self, rect: tuple[float, float, float, float]) -> Box:
         left, top, right, bottom = rect

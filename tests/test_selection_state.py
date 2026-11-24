@@ -59,16 +59,3 @@ def test_cancel_clears_active_drag() -> None:
     assert state.active is False
     assert state.image_box is None
     assert state.selection_points() is None
-
-
-def test_veil_covers_only_outside_the_selection() -> None:
-    state = SelectionState((400, 300), (400, 300))
-    state.down(100, 50)
-    state.drag(200, 150)
-
-    assert state.veil_rects() == (
-        (0.0, 0.0, 400, 50.0),
-        (0.0, 150.0, 400, 300),
-        (0.0, 50.0, 100.0, 150.0),
-        (200.0, 50.0, 400, 150.0),
-    )

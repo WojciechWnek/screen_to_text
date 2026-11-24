@@ -8,7 +8,6 @@ no Retina conversion in the crop path and no image written to disk.
 
 from __future__ import annotations
 
-import io
 from typing import Any
 
 from AppKit import (
@@ -19,7 +18,6 @@ from AppKit import (
     NSBezierPath,
     NSBorderlessWindowMask,
     NSColor,
-    NSCompositeSourceOver,
     NSCursor,
     NSEvent,
     NSEventMaskLeftMouseUp,
@@ -27,7 +25,6 @@ from AppKit import (
     NSFontAttributeName,
     NSForegroundColorAttributeName,
     NSGraphicsContext,
-    NSImage,
     NSMakePoint,
     NSMakeRect,
     NSObject,
@@ -47,7 +44,7 @@ from Quartz import kCGStatusWindowLevel
 
 from .capture import Box
 from .overlay import OverlayError
-from .selection_state import MAC_VEIL_ALPHA, SelectionState
+from .selection_state import SelectionState
 
 _ESCAPE_KEYCODE = 53
 
@@ -80,7 +77,7 @@ class _OverlayWindow(NSWindow):  # type: ignore[misc]
 
 
 class _SelectionView(NSView):  # type: ignore[misc]
-    """Draws the frozen preview and forwards pointer/key events to its owner."""
+    """Transparent view that forwards pointer/key events to its owner."""
 
     def isFlipped(self) -> bool:
         # All pointer coordinates then have a top-left origin, like the image.
@@ -145,13 +142,6 @@ def _point(event: Any, view: Any) -> tuple[float, float]:
     return float(local.x), float(local.y)
 
 
-def _ns_image(image: Image.Image) -> Any:
-    """Convert a PIL image to NSImage through an in-memory PNG buffer."""
-    buffer = io.BytesIO()
-    image.save(buffer, format="PNG")
-    return NSImage.alloc().initWithData_(buffer.getvalue())
-
-
 def schedule(delay: float, callback: Any) -> Any:
     """Run ``callback`` during a modal overlay loop.
 
@@ -185,7 +175,6 @@ class MacSelectionOverlay:
         self._box: Box | None = None
         self._viewport = (0, 0)
         self._state = SelectionState(self._image.size, (1, 1))
-        self._bright: Any | None = None
 
     # -- public API ------------------------------------------------------- #
 
@@ -235,15 +224,14 @@ class MacSelectionOverlay:
     # -- construction ------------------------------------------------------ #
 
     def _build(self, frame: Any, width: int, height: int) -> None:
-        self._bright = _ns_image(self._image)
-
         window = _OverlayWindow.alloc().initWithContentRect_styleMask_backing_defer_(
             frame, NSBorderlessWindowMask, NSBackingStoreBuffered, False
         )
-        # High enough to cover normal windows, low enough that system dialogs
-        # and Force Quit remain reachable if something goes wrong.
         window.setLevel_(kCGStatusWindowLevel)
-        window.setOpaque_(True)
+        # The live desktop stays visible: only the selection rectangle is drawn.
+        # Clear backing avoids a white flash before the first draw.
+        window.setOpaque_(False)
+        window.setBackgroundColor_(NSColor.clearColor())
         window.setCollectionBehavior_(
             NSWindowCollectionBehaviorCanJoinAllSpaces
             | NSWindowCollectionBehaviorFullScreenAuxiliary
@@ -253,6 +241,7 @@ class MacSelectionOverlay:
         view = _SelectionView.alloc().initWithFrame_(
             NSMakeRect(0, 0, float(width), float(height))
         )
+        view.setWantsLayer_(True)
         view.owner = self
         window.setContentView_(view)
 
@@ -334,34 +323,20 @@ class MacSelectionOverlay:
             self._view.setNeedsDisplay_(True)
 
     def draw(self) -> None:
-        """Draw the frozen preview, veil, outline and size label."""
+        """Clear to transparent and draw only the selection outline and label."""
         if NSGraphicsContext.currentContext() is None:
             return
         width, height = self._viewport
         target = NSMakeRect(0, 0, float(width), float(height))
-        source = NSMakeRect(
-            0, 0, float(self._image.width), float(self._image.height)
-        )
         NSGraphicsContext.saveGraphicsState()
         try:
-            # Draw the frozen desktop at full brightness once, then lay a
-            # single light veil over everything outside the selection.
-            if self._bright is not None:
-                self._bright.drawInRect_fromRect_operation_fraction_respectFlipped_hints_(
-                    target, source, NSCompositeSourceOver, 1.0, True, None
-                )
+            NSColor.clearColor().setFill()
+            NSRectFill(target)
 
             selection = self._state.selection_points()
             if selection is None:
-                # Before the first drag, show the frozen desktop at full
-                # brightness: no veil, no outline. The veil appears only once
-                # the user starts selecting.
                 return
             left, top, right, bottom = selection
-
-            NSColor.colorWithCalibratedWhite_alpha_(0.0, MAC_VEIL_ALPHA).setFill()
-            for x1, y1, x2, y2 in self._state.veil_rects():
-                NSRectFill(NSMakeRect(x1, y1, x2 - x1, y2 - y1))
 
             outline = NSBezierPath.bezierPathWithRect_(
                 NSMakeRect(left, top, right - left, bottom - top)
@@ -441,4 +416,3 @@ class MacSelectionOverlay:
         self._window = None
         self._view = None
         self._window_delegate = None
-        self._bright = None
