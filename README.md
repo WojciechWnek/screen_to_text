@@ -23,11 +23,11 @@ Cross-platform: **macOS** (Apple Silicon / Intel) and **Windows**.
 └──────────────────────────────────────────────────────────┘
 ```
 
-> **Status: Phase 0–2 complete.** `uv run stt` works end-to-end on macOS: the desktop is grabbed into
-> memory, you drag a box, Apple Vision reads it, indentation is reconstructed, and the text lands on
-> your clipboard. 57 tests cover the layout engine, capture invariants, the selection overlay and the
-> full pipeline. Windows OCR (Phase 3) is written but **unverified**; hotkeys and packaging
-> (Phase 4) are not started.
+> **Status: Phases 0–2 and 4 complete.** `uv run stt` works end-to-end on macOS: the desktop is
+> grabbed into memory, you drag a box, Apple Vision reads it, indentation is reconstructed, and the
+> text lands on your clipboard. 69 tests cover the layout engine, capture invariants, the selection
+> overlay, the full pipeline and the hotkey daemon. Phase 4 adds `stt listen`, `--indent tabs`, and
+> build configs for a `.app` / `.exe`. Windows OCR (Phase 3) is written but **unverified**.
 
 ---
 
@@ -38,6 +38,7 @@ Cross-platform: **macOS** (Apple Silicon / Intel) and **Windows**.
 - [Architecture](#architecture)
 - [The layout reconstruction algorithm](#the-layout-reconstruction-algorithm)
 - [Installation](#installation)
+- [Building the bundles](#building-the-bundles)
 - [Usage](#usage)
 - [Platform notes](#platform-notes)
 - [Build plan](#build-plan)
@@ -117,26 +118,38 @@ no OCR flakiness** — synthetic boxes in, expected text out.
 screen_to_text/
 ├── agents.md                  # agent instructions for this repo
 ├── README.md                  # this file
-├── pyproject.toml             # uv / hatchling, extras: [mac] [win] [tesseract]
+├── pyproject.toml             # uv / hatchling, extras: [mac] [win] [tesseract] [hotkey] [bundle]
 ├── src/
 │   └── screen_ocr/
 │       ├── __init__.py
-│       ├── main.py            # CLI entry point: `stt`, `stt grab`, `stt doctor`
+│       ├── main.py            # CLI: `stt`, `stt grab`, `stt listen`, `stt demo`, `stt doctor`
 │       ├── models.py          # Token(text, left, top, width, height, conf)
 │       ├── capture.py         # desktop grab + crop, all in RAM
 │       ├── overlay.py         # frozen-desktop selection UI (Tk + Canvas)
 │       ├── layout.py          # geometry → indented text  (PURE, no I/O)
 │       ├── clipboard.py       # text-only injection, silent on empty
+│       ├── hotkey.py          # pynput daemon; queues events, grabs on the main thread
+│       ├── launcher.py        # bundle entry point: starts `listen --quiet`
 │       └── ocr/
 │           ├── __init__.py    # backend selection by platform / --engine
 │           ├── base.py        # OcrBackend protocol
 │           ├── vision.py      # macOS Vision via pyobjc
 │           ├── windows.py     # Windows.Media.Ocr via winsdk
 │           └── tesseract.py   # optional fallback
+├── packaging/
+│   ├── py2app_setup.py        # macOS .app build
+│   └── stt.spec               # Windows .exe build
+├── scripts/
+│   ├── build_macos.sh
+│   └── build_windows.ps1
 └── tests/
     ├── test_layout.py         # synthetic boxes, golden strings
     ├── test_layout_render.py  # render real code to PIL, round-trip
-    └── test_capture.py        # scale/crop invariants, no disk artifacts
+    ├── test_capture.py        # scale/crop invariants, no disk artifacts
+    ├── test_overlay.py        # selection UI, both cancel paths
+    ├── test_grab_integration.py  # full overlay → OCR → clipboard chain
+    ├── test_hotkey.py         # daemon wiring with a scripted listener
+    └── test_cli.py            # exit codes and argument wiring
 ```
 
 Data flow, precisely:
@@ -214,8 +227,8 @@ Output: a `str` with no trailing newline.
 - Empty selection / no tokens → return `""` → caller leaves the clipboard alone.
 - A single line → no indentation applied (there is no column 0 to compare against), so a one-line
   copy of an indented line does not gain phantom leading spaces.
-- Tabs: v1 emits spaces. `--indent tabs` (phase 4) quantizes indents to tab stops when the source
-  clearly used them.
+- Tabs: spaces are the default. `--indent tabs` quantizes **leading** indentation to tab stops
+  (`--tab-width`, default 4); internal gaps stay spaces. A single selected line is never indented.
 - Dark mode (light text on dark background) is free — the native engines do their own binarization.
 - Vertical text / rotated text: out of scope, documented.
 
@@ -229,10 +242,10 @@ reliable `pyobjc` / `onnxruntime` wheels).
 ```bash
 # macOS
 brew install uv                       # if you don't have it
-uv sync --extra mac
+uv sync --extra mac --extra hotkey    # --extra hotkey adds the `stt listen` daemon (optional)
 
 # Windows (PowerShell)
-uv sync --extra win
+uv sync --extra win --extra hotkey
 ```
 
 Optional Tesseract fallback:
@@ -245,19 +258,46 @@ winget install UB-Mannheim.TesseractOCR  # Windows
 
 ---
 
+## Building the bundles
+
+Both scripts install the `hotkey` and `bundle` extras for you and start the app straight into the
+hotkey daemon (no terminal window).
+
+```bash
+# macOS → dist/stt.app
+./scripts/build_macos.sh
+
+# Windows (PowerShell) → dist\stt.exe
+.\scripts\build_windows.ps1
+```
+
+The `.app` is built with py2app and the `.exe` with PyInstaller. On macOS, a rebuilt bundle is a
+**new app** to the permission system: re-grant Screen Recording and Accessibility, then relaunch it.
+The Windows build config is written but, like the Windows OCR backend, has not been verified on real
+hardware from this machine.
+
+If you only want the hotkey from source, skip bundling and run `uv run stt listen`.
+
+---
+
 ## Usage
 
 ```bash
-uv run stt              # drag a box → its text is on your clipboard
-uv run stt demo         # render a code sample and OCR it (no screen, no permissions)
-uv run stt --debug      # print the reconstructed text + token boxes instead of copying
-uv run stt doctor       # permissions, OCR engines, displays, DPI sanity check
+uv run stt                            # drag a box → its text is on your clipboard
+uv run stt listen                     # global hotkey daemon: Cmd/Ctrl+Shift+2 to grab
+uv run stt grab --indent tabs         # leading indentation as tab stops (internal gaps stay spaces)
+uv run stt grab --debug               # print the reconstructed text + token boxes instead of copying
+uv run stt demo                       # render a code sample and OCR it (no screen, no permissions)
+uv run stt doctor                     # permissions, OCR engines, displays, DPI sanity check
 ```
 
 Then paste anywhere with `Cmd+V` / `Ctrl+V`.
 
 On success there is **no** output at all — the text appearing on your clipboard is the feedback.
 Exit codes: `0` copied, `1` error (permission, no text, engine failure), `2` cancelled with `Esc`.
+
+The daemon prints one startup line to stderr, then stays silent. Press **Cmd/Ctrl+Shift+2** to grab;
+**Cmd/Ctrl+Shift+Alt+2** quits it. Both are configurable with `--hotkey` and `--quit-hotkey`.
 
 ### Verify it without touching the screen
 
@@ -295,13 +335,15 @@ echo '[{"text":"a","left":0,"top":0,"width":9,"height":18},
        {"text":"b","left":90,"top":0,"width":9,"height":18}]' | uv run stt layout
 ```
 
-### Bind it to a key
+### Hotkey permissions
 
-No background daemon, no Accessibility permission:
+`stt listen` uses `pynput` for the global hotkey. On macOS the process needs
+**System Settings → Privacy & Security → Accessibility** (Input Monitoring may also be requested).
+Grant it to your terminal before starting the daemon, then restart the terminal — macOS applies the
+change only to newly started processes. Screen Recording is still required for the capture itself.
 
-- **macOS**: Raycast / Alfred / Automator Quick Action → `uv run stt` in this directory.
-  A native `pynput` hotkey daemon is phase 4.
-- **Windows**: a shortcut's *Target* set to the launcher `.exe`, or AutoHotkey.
+If you would rather not grant Accessibility, bind `uv run stt` in Raycast / Alfred / Automator
+(macOS) or point a shortcut at `stt.exe` (Windows).
 
 `--debug` is the recommended way to tune the layout: it prints the reconstructed text plus the raw
 token table, so you can see exactly why a column collapsed.
@@ -348,7 +390,7 @@ token table, so you can see exactly why a column collapsed.
 | **1** | `models.py`, `layout.py`, `tests/test_layout.py` | `pytest` green on nested Python code, blank lines, table columns, single-line and empty input | ✅ |
 | **2** | `capture.py`, `overlay.py`, `ocr/vision.py`, `clipboard.py`, `main.py` | On macOS: select code in an editor, paste, diff against the original, no files created | ✅ |
 | **3** | `ocr/windows.py`, DPI awareness, per-display overlay | Verified on a real Windows machine (see [open items](#open-items)) | ⚠️ written, unverified |
-| **4** | `pynput` hotkey daemon, `--indent tabs`, PyInstaller / py2app bundle | Hotkey grabs without a terminal; `stt.app` / `stt.exe` runs | ⬜ not started |
+| **4** | `pynput` hotkey daemon, `--indent tabs`, PyInstaller / py2app bundle | Hotkey grabs without a terminal; `stt.app` / `stt.exe` runs | ✅ implemented; macOS `.app` builds, Windows `.exe` config unverified |
 
 Phases 0–1 need no GUI and no permissions, which is why they come first: verifiable progress on the
 riskiest logic before anything touches the screen.
@@ -398,11 +440,14 @@ paste into an editor with soft-wrap disabled, and diff. Target: zero diffs on mo
    in the global coordinate space) is a phase 2.5 item — the one part of `AGENTS.md` that Tk makes
    genuinely awkward. The frozen-desktop design keeps the *coordinates* trivial; only window
    placement is fiddly.
-3. **Hotkey and packaging.** Phase 4. Today you bind `uv run stt` to a key in Raycast/Alfred/Automator
-   (macOS) or a shortcut/AutoHotkey (Windows). A `pynput` daemon and a PyInstaller/py2app bundle are
-   not built yet.
-4. **Toolbar-less UX.** After a successful copy there is deliberately **no** notification. If that
-   feels like the tool didn't run, a 1-second tray-less HUD is a possible phase-4 option — off by
+3. **Hotkey verification.** `stt listen` and the bundled `.app` start cleanly, but the actual
+   Cmd+Shift+2 grab needs Accessibility granted and a manual press on real hardware. If you would
+   rather not grant it, bind `uv run stt` to a key in Raycast/Alfred/Automator (macOS) or a
+   shortcut/AutoHotkey (Windows).
+4. **Windows bundle.** `packaging/stt.spec` produces `dist\stt.exe` in theory, but the build has not
+   been run on Windows (see item 1).
+5. **Toolbar-less UX.** After a successful copy there is deliberately **no** notification. If that
+   feels like the tool didn't run, an opt-in 1-second tray-less HUD remains a future option — off by
    default.
 
 ---

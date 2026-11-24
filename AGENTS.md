@@ -11,9 +11,9 @@ capture, drags a rectangle over the screen, and the text inside that rectangle i
 **indentation, internal spacing and blank lines preserved**, then copied to the clipboard as plain
 text — nothing else. The screenshot is never written to disk.
 
-Status: **Phases 0–2 are complete** — scaffold, pure layout engine, and a working macOS pipeline
-(`stt grab`: capture → overlay → Vision → layout → clipboard), with 57 tests green. Windows OCR
-(Phase 3) exists but is **unverified**; hotkeys and packaging (Phase 4) are not started.
+Status: **Phases 0–2 and 4 are complete** — scaffold, pure layout engine, a working macOS pipeline
+(`stt grab`: capture → overlay → Vision → layout → clipboard), and a `pynput` hotkey daemon with
+bundles, with 69 tests green. Windows OCR (Phase 3) and the Windows `.exe` build are **unverified**.
 
 ## Locked decisions (do not re-litigate these without asking the user)
 
@@ -38,8 +38,9 @@ scope change, not a refactor.
 4. **Tkinter** for the overlay (no Qt, no webview). **`mss`** for capture. **`pyperclip`** for the
    clipboard. **`uv`** for environments, pinned to **Python 3.12 or 3.13** — the machine's default
    3.15 is too new for reliable `pyobjc` wheels.
-5. **CLI-first.** Entry point `stt`. Global hotkey daemon (`pynput`) and packaging are Phase 4, not
-   Phase 1. Do not add a tray icon or daemon before the core works.
+5. **CLI-first.** Entry point `stt`. The global hotkey daemon (`pynput`, `stt listen`) and packaging
+   arrived in Phase 4, after the core worked. Do not add a tray icon: the bundled app is a
+   terminal-less daemon, not a tray UI.
 
 ## Hard invariants
 
@@ -78,20 +79,32 @@ the feedback. `--debug` is the only chatty mode.
 
 ```text
 src/screen_ocr/
-  main.py         # CLI: `stt`, `stt grab`, `stt doctor`; owns wiring, no logic
+  main.py         # CLI: `stt`, `stt grab`, `stt listen`, `stt demo`, `stt doctor`; wiring only
   models.py       # Token dataclass
   capture.py      # grab_desktop() -> PIL.Image, crop(img, box) -> PIL.Image
   overlay.py      # frozen-desktop selection UI, returns box|None
   layout.py       # PURE: list[Token] -> str
   clipboard.py    # copy(text), silent no-op on blank
+  hotkey.py       # pynput listener; queues events, runs grab_once on the main thread
+  launcher.py     # bundle entry point: `listen --quiet`
+  demo.py         # renders a source sample in RAM for the round-trip check
   ocr/base.py     # OcrBackend protocol
   ocr/vision.py   # macOS
   ocr/windows.py  # Windows
   ocr/tesseract.py
+packaging/
+  py2app_setup.py # macOS .app
+  stt.spec        # Windows .exe
+scripts/
+  build_macos.sh / build_windows.ps1
 tests/
   test_layout.py          # synthetic boxes -> golden strings (primary safety net)
   test_layout_render.py   # render real code with a real monospace font, round-trip
   test_capture.py         # crop invariants + "no files created"
+  test_overlay.py         # selection UI, both cancel paths
+  test_grab_integration.py # overlay -> crop -> OCR -> layout -> clipboard
+  test_hotkey.py          # daemon wiring with a scripted listener
+  test_cli.py             # exit codes and argument wiring
 ```
 
 Data flow — keep it this shape:
@@ -147,7 +160,8 @@ Required edge-case behaviour:
 - No tokens → `""` (caller then leaves the clipboard alone).
 - **Single line → no indentation at all.** With no column 0 to compare against, a one-line copy of
   an indented line must not gain phantom leading spaces.
-- Tabs: v1 emits spaces only. `--indent tabs` is Phase 4.
+- Tabs: spaces are the default. `--indent tabs` (Phase 4) quantises **leading** indentation to
+  `--tab-width` stops; internal gaps stay spaces. Never split a token to do it.
 - Dark mode needs no special handling — native engines binarize themselves.
 - Rotated/vertical text is out of scope; document, don't half-support.
 
@@ -216,8 +230,8 @@ Required edge-case behaviour:
 
 ## Build plan (work in this order)
 
-Phases 0, 1 and 2 are done (57 tests green); Phase 3 (Windows) is written but unverified; Phase 4 is
-next after that.
+Phases 0, 1, 2 and 4 are done (69 tests green); Phase 3 (Windows) and the Windows `.exe` build are
+written but unverified.
 
 | Phase | Work | Done when |
 | --- | --- | --- |
@@ -225,7 +239,7 @@ next after that.
 | 1 | `models.py`, `layout.py`, `tests/test_layout.py` | `pytest` green on all layout cases |
 | 2 | `capture.py`, `overlay.py`, `ocr/vision.py`, `clipboard.py`, `main.py` | macOS: select code, paste, diff vs original = empty; no files created |
 | 3 | `ocr/windows.py`, DPI awareness, per-display overlay | verified on real Windows hardware |
-| 4 | `pynput` hotkey daemon, `--indent tabs`, PyInstaller/py2app bundle | hotkey works without a terminal; `.app`/`.exe` runs |
+| 4 | `pynput` hotkey daemon, `--indent tabs`, PyInstaller/py2app bundle | hotkey works without a terminal; `.app`/`.exe` runs (macOS `.app` builds; Windows `.exe` unverified) |
 
 Do not skip ahead to packaging or hotkeys while Phase 1 tests are red.
 
@@ -236,7 +250,8 @@ Do not skip ahead to packaging or hotkeys while Phase 1 tests are red.
 - **Multi-monitor:** v1 targets the primary display only. Per-display overlay windows (Quartz
   `CGGetActiveDisplayList`, each positioned in global coordinate space) are Phase 2.5. Tk makes
   negative window offsets awkward — verify empirically on the Mac before designing around it.
-- **No success feedback** is intentional; a 1-second HUD would be opt-in, Phase 4, off by default.
+- **No success feedback** is intentional; a 1-second HUD remains a possible opt-in future option,
+  off by default (not shipped in Phase 4).
 
 ## When in doubt
 

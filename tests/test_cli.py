@@ -78,6 +78,19 @@ def test_layout_reports_empty_selection_as_empty_output(
     assert capsys.readouterr().out == ""
 
 
+def test_layout_can_emit_tab_indentation(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    tokens = [
+        {"text": "root", "left": 0, "top": 0, "width": 28, "height": 18},
+        {"text": "next", "left": 28, "top": 18, "width": 28, "height": 18},
+    ]
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(tokens)))
+
+    assert main(["layout", "--indent", "tabs"]) == EXIT_OK
+    assert capsys.readouterr().out == "root\n\tnext"
+
+
 # --------------------------------------------------------------------------- #
 # grab flow, with the screen and the OCR engine faked out
 # --------------------------------------------------------------------------- #

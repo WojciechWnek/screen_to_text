@@ -198,3 +198,34 @@ def test_vision_normalised_box_conversion_contract() -> None:
     ]
 
     assert reconstruct(tokens) == "col0    col4"
+
+
+def test_tab_indent_uses_tab_stops() -> None:
+    tokens = [
+        *row("def foo():", line=0, indent=0),
+        *row("if x:", line=1, indent=4),
+        *row("return 1", line=2, indent=8),
+    ]
+
+    assert reconstruct(tokens, indent_style="tabs") == (
+        "def foo():\n\tif x:\n\t\treturn 1"
+    )
+
+
+def test_tab_indent_keeps_remainder_as_spaces() -> None:
+    tokens = [*row("root", line=0), *row("child", line=1, indent=6)]
+
+    assert reconstruct(tokens, indent_style="tabs", tab_width=4) == "root\n\t  child"
+
+
+def test_tab_indent_keeps_internal_gaps_as_spaces() -> None:
+    tokens = [*row("name", line=0), *row("age", line=0, indent=8)]
+    tokens += [*row("alice", line=1, indent=4), *row("30", line=1, indent=12)]
+
+    text = reconstruct(tokens, indent_style="tabs")
+
+    assert text == "name    age\n\talice   30"
+
+
+def test_single_line_has_no_phantom_tab() -> None:
+    assert reconstruct(row("return 1", indent=8), indent_style="tabs") == "return 1"

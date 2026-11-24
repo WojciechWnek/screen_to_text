@@ -19,8 +19,11 @@ from __future__ import annotations
 
 import statistics
 from collections.abc import Sequence
+from typing import Literal
 
 from .models import Token
+
+IndentStyle = Literal["spaces", "tabs"]
 
 #: Tokens shorter than this are excluded from the character-width estimate:
 #: a 1-2 character token ("if", "x") has too much bearing/padding noise.
@@ -44,6 +47,9 @@ OVERLAP_RATIO = 0.5
 #: when the tokens are too short to measure it.
 FALLBACK_CHAR_WIDTH_RATIO = 0.6
 
+#: Column width used when quantising leading indentation to tab stops.
+DEFAULT_TAB_WIDTH = 4
+
 
 def reconstruct(
     tokens: Sequence[Token],
@@ -51,11 +57,14 @@ def reconstruct(
     min_conf: float = 0.0,
     max_gap_spaces: int = DEFAULT_MAX_GAP_SPACES,
     max_blank_lines: int = DEFAULT_MAX_BLANK_LINES,
+    indent_style: IndentStyle = "spaces",
+    tab_width: int = DEFAULT_TAB_WIDTH,
 ) -> str:
     """Rebuild indented, line-broken text from OCR tokens.
 
     Returns ``""`` when there is nothing usable, so the caller can leave the
-    user's clipboard untouched.
+    user's clipboard untouched. ``indent_style="tabs"`` quantises leading
+    indentation to ``tab_width``-column stops; internal gaps stay spaces.
     """
     kept = [token for token in tokens if token.text.strip() and token.conf >= min_conf]
     if not kept:
@@ -81,7 +90,7 @@ def reconstruct(
         rendered.append(
             _render_line(
                 line,
-                indent=indent,
+                indent=_render_indent(indent, indent_style, tab_width),
                 char_width=char_width,
                 max_gap_spaces=max_gap_spaces,
             )
@@ -140,14 +149,22 @@ def _estimate_char_width(tokens: Sequence[Token], line_height: float) -> float:
     return max(line_height * FALLBACK_CHAR_WIDTH_RATIO, 1.0)
 
 
+def _render_indent(spaces: int, style: IndentStyle, tab_width: int) -> str:
+    """Turn a leading-space count into spaces or quantised tab stops."""
+    if style == "spaces" or tab_width <= 0:
+        return " " * spaces
+    tabs, remainder = divmod(spaces, tab_width)
+    return "\t" * tabs + " " * remainder
+
+
 def _render_line(
     tokens: Sequence[Token],
     *,
-    indent: int,
+    indent: str,
     char_width: float,
     max_gap_spaces: int,
 ) -> str:
-    pieces = [" " * indent]
+    pieces = [indent]
     previous: Token | None = None
     for token in sorted(tokens, key=lambda item: item.left):
         text = token.text.strip()

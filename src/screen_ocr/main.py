@@ -27,7 +27,7 @@ from .capture import (
 )
 from .clipboard import ClipboardError
 from .clipboard import copy as copy_to_clipboard
-from .layout import DEFAULT_MAX_GAP_SPACES, reconstruct
+from .layout import DEFAULT_MAX_GAP_SPACES, DEFAULT_TAB_WIDTH, reconstruct
 from .models import Token
 from .ocr import OcrError, OcrUnavailable, create_backend, platform_engine
 
@@ -53,11 +53,25 @@ def main(argv: Sequence[str] | None = None) -> int:
 # --------------------------------------------------------------------------- #
 
 
-def _cmd_grab(args: argparse.Namespace) -> int:
+def grab_once(
+    *,
+    engine: str = "auto",
+    lang: str | None = None,
+    min_conf: float = 0.0,
+    debug: bool = False,
+    indent: str = "spaces",
+    tab_width: int = DEFAULT_TAB_WIDTH,
+) -> int:
+    """Run one capture → OCR → clipboard cycle.
+
+    Shared by ``stt grab`` and the hotkey daemon so both paths behave
+    identically. Returns an exit code; expected failures are reported to
+    stderr in one actionable line.
+    """
     from .overlay import OverlayError, SelectionOverlay
 
     try:
-        backend = create_backend(args.engine, args.lang)
+        backend = create_backend(engine, lang)
     except OcrUnavailable as exc:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_ERROR
@@ -88,9 +102,14 @@ def _cmd_grab(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_ERROR
 
-    text = reconstruct(tokens, min_conf=args.min_conf)
+    text = reconstruct(
+        tokens,
+        min_conf=min_conf,
+        indent_style=indent,  # type: ignore[arg-type]
+        tab_width=tab_width,
+    )
 
-    if args.debug:
+    if debug:
         _print_tokens(tokens)
         if text:
             print(text)
@@ -109,6 +128,51 @@ def _cmd_grab(args: argparse.Namespace) -> int:
         print("nothing to copy - clipboard left untouched", file=sys.stderr)
         return EXIT_ERROR
     return EXIT_OK
+
+
+def _cmd_grab(args: argparse.Namespace) -> int:
+    return grab_once(
+        engine=args.engine,
+        lang=args.lang,
+        min_conf=args.min_conf,
+        debug=args.debug,
+        indent=args.indent,
+        tab_width=args.tab_width,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# listen (global hotkey daemon)
+# --------------------------------------------------------------------------- #
+
+
+def _cmd_listen(args: argparse.Namespace) -> int:
+    from .hotkey import (
+        HotkeyUnavailable,
+        default_hotkey,
+        default_quit_hotkey,
+        serve,
+    )
+
+    def action() -> int:
+        return grab_once(
+            engine=args.engine,
+            lang=args.lang,
+            min_conf=args.min_conf,
+            indent=args.indent,
+            tab_width=args.tab_width,
+        )
+
+    try:
+        return serve(
+            hotkey=args.hotkey or default_hotkey(),
+            quit_hotkey=args.quit_hotkey or default_quit_hotkey(),
+            action=action,
+            quiet=args.quiet,
+        )
+    except HotkeyUnavailable as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return EXIT_ERROR
 
 
 # --------------------------------------------------------------------------- #
@@ -132,7 +196,12 @@ def _cmd_demo(args: argparse.Namespace) -> int:
         print(f"error: {exc}", file=sys.stderr)
         return EXIT_ERROR
 
-    text = reconstruct(tokens, min_conf=args.min_conf)
+    text = reconstruct(
+        tokens,
+        min_conf=args.min_conf,
+        indent_style=args.indent,  # type: ignore[arg-type]
+        tab_width=args.tab_width,
+    )
 
     if args.show_tokens:
         _print_tokens(tokens)
@@ -168,6 +237,8 @@ def _cmd_layout(args: argparse.Namespace) -> int:
         tokens,
         min_conf=args.min_conf,
         max_gap_spaces=args.max_gap_spaces,
+        indent_style=args.indent,  # type: ignore[arg-type]
+        tab_width=args.tab_width,
     )
 
     if args.show_tokens:
@@ -221,6 +292,7 @@ def _cmd_doctor(_args: argparse.Namespace) -> int:
     _report("  pillow", _module_status("PIL"))
     _report("  pyperclip", _module_status("pyperclip"))
     _report("  tkinter", _module_status("tkinter"))
+    _report("  pynput", _module_status("pynput"), suffix="(hotkey)")
 
     print()
     print("ocr engines")
@@ -356,7 +428,31 @@ def _build_parser() -> argparse.ArgumentParser:
         help="drop OCR tokens below this confidence (0.0-1.0)",
     )
     grab.add_argument("--debug", action="store_true", help="print text and token boxes, do not copy")
+    _add_indent_options(grab)
     grab.set_defaults(handler=_cmd_grab)
+
+    listen = subparsers.add_parser(
+        "listen",
+        help="run in the background and grab on a global hotkey",
+    )
+    listen.add_argument(
+        "--hotkey",
+        default=None,
+        help="pynput hotkey (default: Cmd+Shift+2 on macOS, Ctrl+Shift+2 elsewhere)",
+    )
+    listen.add_argument("--engine", choices=("auto", "vision", "windows", "tesseract"), default="auto")
+    listen.add_argument("--lang", default=None)
+    listen.add_argument("--min-conf", type=float, default=0.0)
+    listen.add_argument(
+        "--quit-hotkey",
+        default=None,
+        help="hotkey that stops the daemon (default: Cmd/Ctrl+Shift+Alt+2)",
+    )
+    listen.add_argument(
+        "--quiet", action="store_true", help="do not print the startup line to stderr"
+    )
+    _add_indent_options(listen)
+    listen.set_defaults(handler=_cmd_listen)
 
     layout = subparsers.add_parser(
         "layout",
@@ -380,6 +476,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="print the parsed token table to stderr",
     )
+    _add_indent_options(layout)
     layout.set_defaults(handler=_cmd_layout)
 
     demo = subparsers.add_parser(
@@ -394,12 +491,28 @@ def _build_parser() -> argparse.ArgumentParser:
     demo.add_argument("--lang", default=None)
     demo.add_argument("--min-conf", type=float, default=0.0)
     demo.add_argument("--show-tokens", action="store_true")
+    _add_indent_options(demo)
     demo.set_defaults(handler=_cmd_demo)
 
     doctor = subparsers.add_parser("doctor", help="report environment, engines and displays")
     doctor.set_defaults(handler=_cmd_doctor)
 
     return parser
+
+
+def _add_indent_options(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--indent",
+        choices=("spaces", "tabs"),
+        default="spaces",
+        help="leading indentation: spaces (default) or tab stops",
+    )
+    parser.add_argument(
+        "--tab-width",
+        type=int,
+        default=DEFAULT_TAB_WIDTH,
+        help=f"columns per tab when --indent tabs (default: {DEFAULT_TAB_WIDTH})",
+    )
 
 
 if __name__ == "__main__":

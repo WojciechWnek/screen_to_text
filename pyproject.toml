@@ -35,9 +35,15 @@ mac = [
 win = ["winsdk>=1.0.0b10"]
 tesseract = ["pytesseract>=0.3.10"]
 dev = ["pytest>=8.0", "pytest-cov>=5.0"]
+hotkey = ["pynput>=1.7"]
+bundle = [
+    "py2app>=0.28; sys_platform == 'darwin'",
+    "pyinstaller>=6.0; sys_platform == 'win32'",
+]
 
 [project.scripts]
 stt = "screen_ocr.main:main"
+stt-listen = "screen_ocr.launcher:app_main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/screen_ocr"]
